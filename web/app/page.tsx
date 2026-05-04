@@ -160,6 +160,53 @@ const TIMEFRAMES: { id: TimeFrame; label: string; ms: number }[] = [
   { id: "3m", label: "3M", ms: 90 * 24 * 60 * 60 * 1000 },
 ];
 
+const TIMEZONES: { value: string; label: string; short: string }[] = [
+  { value: "UTC", label: "UTC", short: "UTC" },
+  { value: "America/New_York", label: "Eastern (ET)", short: "ET" },
+  { value: "America/Chicago", label: "Central (CT)", short: "CT" },
+  { value: "America/Los_Angeles", label: "Pacific (PT)", short: "PT" },
+  { value: "Europe/London", label: "London (GMT/BST)", short: "GMT" },
+  { value: "Europe/Berlin", label: "Central Europe (CET)", short: "CET" },
+  { value: "Asia/Tokyo", label: "Tokyo (JST)", short: "JST" },
+  { value: "Asia/Shanghai", label: "China (CST)", short: "CST" },
+  { value: "Asia/Singapore", label: "Singapore (SGT)", short: "SGT" },
+  { value: "Asia/Kuala_Lumpur", label: "Malaysia (MYT)", short: "MYT" },
+  { value: "Asia/Dubai", label: "Dubai (GST)", short: "GST" },
+  { value: "Australia/Sydney", label: "Sydney (AEST)", short: "AEST" },
+];
+
+function dateInTz(date: Date, tz: string) {
+  return new Date(date.toLocaleString("en-US", { timeZone: tz }));
+}
+
+function formatDateTz(iso: string, tz: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "—";
+  return d.toLocaleString("en-US", {
+    timeZone: tz,
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function dateBucketKey(iso: string, tz: string, hourly: boolean): string {
+  const d = new Date(iso);
+  const locStr = d.toLocaleString("en-US", {
+    timeZone: tz,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+  const m = locStr.match(/(\d+)\/(\d+)\/(\d+),?\s*(\d+):(\d+)/);
+  if (!m) return iso;
+  const [, mo, dd, yr, hh] = m;
+  return hourly
+    ? `${yr}-${mo}-${dd} ${hh}:00`
+    : `${yr}-${mo}-${dd}`;
+}
+
 function truncHash(hash: string) {
   if (hash.length > 20)
     return `${hash.slice(0, 10)}...${hash.slice(-8)}`;
@@ -414,12 +461,14 @@ function SandwichCard({
   isExpanded,
   onToggle,
   showChainBadge,
+  tz,
 }: {
   sw: Sandwich & { chainId?: string };
   chain: ChainConfig;
   isExpanded: boolean;
   onToggle: () => void;
   showChainBadge?: boolean;
+  tz: string;
 }) {
   return (
     <div className="border border-[var(--color-border)] rounded-[6px] mb-2 sm:mb-3 overflow-hidden">
@@ -467,6 +516,11 @@ function SandwichCard({
           <span className="text-[var(--color-negative)]">
             {sw.victims.length} victim{sw.victims.length !== 1 ? "s" : ""}
           </span>
+          {sw.block_timestamp && (
+            <span className="text-[var(--color-text-dim)] font-[family-name:var(--font-mono)] tabular-nums">
+              {formatDateTz(sw.block_timestamp, tz)}
+            </span>
+          )}
           <span className="text-[var(--color-text-dim)]">
             {isExpanded ? "▾" : "▸"} details
           </span>
@@ -604,6 +658,7 @@ export default function Page() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [chartTf, setChartTf] = useState<TimeFrame>("all");
+  const [tz, setTz] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
   const [historyData, setHistoryData] = useState<Record<string, Sandwich[]>>({ eth: [], bsc: [], sol: [] });
   const PAGE_SIZE = 20;
 
@@ -686,11 +741,7 @@ export default function Page() {
 
     const buckets = new Map<string, { date: string; profit: number; count: number }>();
     for (const sw of filtered) {
-      const d = new Date(sw.block_timestamp!);
-      const useHourly = chartTf === "1d";
-      const key = useHourly
-        ? `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")} ${String(d.getUTCHours()).padStart(2, "0")}:00`
-        : `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+      const key = dateBucketKey(sw.block_timestamp!, tz, chartTf === "1d");
       const existing = buckets.get(key) || { date: key, profit: 0, count: 0 };
       existing.profit += sw.bot_profit_usd ?? 0;
       existing.count += 1;
@@ -702,7 +753,7 @@ export default function Page() {
       cumulative += b.profit;
       return { ...b, profit: Math.round(b.profit * 100) / 100, cumulative: Math.round(cumulative * 100) / 100 };
     });
-  }, [historyData, chartTf, chain]);
+  }, [historyData, chartTf, chain, tz]);
 
   const hasAnyData = RAW_CHAINS.some((c) => allChainData[c] !== null);
 
@@ -805,7 +856,25 @@ export default function Page() {
               <ChainTabs active={chain} onChange={setChain} />
             </div>
           </div>
-          <div className="flex items-center gap-2 sm:gap-4 shrink-0">
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            <div className="flex items-center gap-1 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[4px] px-1.5 py-1">
+              <svg className="w-3 h-3 text-[var(--color-text-dim)] shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="8" cy="8" r="6.5" />
+                <path d="M1.5 8h13M8 1.5C6 3.5 5.2 5.6 5.2 8s.8 4.5 2.8 6.5M8 1.5c2 2 2.8 4.1 2.8 6.5s-.8 4.5-2.8 6.5" />
+              </svg>
+              <select
+                value={tz}
+                onChange={(e) => setTz(e.target.value)}
+                className="bg-[var(--color-surface)] text-[10px] sm:text-[11px] text-[var(--color-text)] focus:outline-none cursor-pointer [color-scheme:dark] appearance-auto max-w-[80px] sm:max-w-none"
+                style={{ colorScheme: "dark" }}
+              >
+                {TIMEZONES.map((t) => (
+                  <option key={t.value} value={t.value} style={{ background: "#1a1a2e", color: "#e0e0e0" }}>
+                    {t.short}
+                  </option>
+                ))}
+              </select>
+            </div>
             {autoRefresh && (
               <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-positive)]">
                 <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-positive)] animate-pulse" />
@@ -844,7 +913,7 @@ export default function Page() {
           <ChainTabs active={chain} onChange={setChain} />
         </div>
         {/* Date Range Filter */}
-        <div className="flex flex-wrap items-center gap-2 mt-3 sm:mt-4">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-3 sm:mt-4">
           <span className="text-[10px] sm:text-[11px] text-[var(--color-text-dim)] uppercase tracking-wide">Date Range</span>
           <input
             type="date"
@@ -1171,6 +1240,7 @@ export default function Page() {
                 isExpanded={expanded === sw.entry_tx.tx_hash}
                 onToggle={() => toggle(sw.entry_tx.tx_hash)}
                 showChainBadge={chain === "all"}
+                tz={tz}
               />
             );
           })}
