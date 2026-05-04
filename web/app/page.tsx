@@ -695,7 +695,6 @@ export default function Page() {
   const [page, setPage] = useState(1);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [ensOnly, setEnsOnly] = useState(false);
   const [chartTf, setChartTf] = useState<TimeFrame>("all");
   const [tz, setTz] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
   const [historyData, setHistoryData] = useState<Record<string, Sandwich[]>>({ eth: [], bsc: [], sol: [] });
@@ -823,7 +822,6 @@ export default function Page() {
   const profitFilter = (sw: Sandwich) => {
     const p = sw.bot_profit_usd ?? 0;
     if (p < -10 || p > 1000) return false;
-    if (ensOnly && !sw.bot_ens) return false;
     if (hasDateFilter) {
       if (!sw.block_timestamp) return false;
       const t = new Date(sw.block_timestamp).getTime();
@@ -1259,16 +1257,6 @@ export default function Page() {
               ✕
             </button>
           )}
-          <button
-            onClick={() => { setEnsOnly(!ensOnly); setPage(1); }}
-            className={`shrink-0 px-2.5 py-1 rounded-[4px] text-[10px] sm:text-[11px] font-medium border transition-colors cursor-pointer ${
-              ensOnly
-                ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-bg)]"
-                : "bg-[var(--color-surface)] border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-dim)]"
-            }`}
-          >
-            ENS Only
-          </button>
         </div>
 
         <div className="space-y-0">

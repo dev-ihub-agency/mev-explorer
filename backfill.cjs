@@ -311,6 +311,28 @@ async function main() {
     }
   }
 
+  // Filter out ENS bots (ETH only)
+  if (chain === "eth" && allSandwiches.length > 0) {
+    const provider = new ethers.JsonRpcProvider(
+      new ethers.FetchRequest(process.env.ETH_RPC_URL || "https://eth.llamarpc.com"),
+      1, { staticNetwork: ethers.Network.from(1) }
+    );
+    const botAddrs = [...new Set(allSandwiches.map((s) => s.bot_address))];
+    console.log(`\nENS lookup for ${botAddrs.length} bot addresses...`);
+    const ensMap = new Map();
+    for (const addr of botAddrs) {
+      try {
+        const name = await provider.lookupAddress(addr);
+        if (name) ensMap.set(addr.toLowerCase(), name);
+      } catch {}
+    }
+    if (ensMap.size > 0) {
+      const before = allSandwiches.length;
+      allSandwiches = allSandwiches.filter((s) => !ensMap.has(s.bot_address.toLowerCase()));
+      console.log(`Filtered out ${before - allSandwiches.length} ENS bot trades (${[...ensMap.values()].join(", ")})`);
+    }
+  }
+
   console.log(`\nTotal sandwiches found: ${allSandwiches.length}`);
 
   if (allSandwiches.length === 0) {
