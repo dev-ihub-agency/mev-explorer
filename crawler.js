@@ -424,6 +424,36 @@ function enrichSandwiches(sandwiches, prices) {
   }
 }
 
+// ---------- ENS 反查 ----------
+
+const ensCache = new Map();
+
+async function resolveEns(provider, addresses) {
+  const unique = [...new Set(addresses)].filter((a) => a && !ensCache.has(a.toLowerCase()));
+  for (const addr of unique) {
+    try {
+      const name = await provider.lookupAddress(addr);
+      ensCache.set(addr.toLowerCase(), name || null);
+    } catch {
+      ensCache.set(addr.toLowerCase(), null);
+    }
+  }
+  return (addr) => ensCache.get(addr?.toLowerCase()) || null;
+}
+
+async function enrichSandwichesEns(provider, sandwiches) {
+  const botAddrs = [...new Set(sandwiches.map((sw) => sw.bot_address))];
+  if (botAddrs.length === 0) return;
+  log(`  ENS 反查 ${botAddrs.length} 个 bot 地址...`);
+  const lookup = await resolveEns(provider, botAddrs);
+  for (const sw of sandwiches) {
+    const ens = lookup(sw.bot_address);
+    if (ens) sw.bot_ens = ens;
+  }
+  const found = sandwiches.filter((sw) => sw.bot_ens).length;
+  log(`  ✓ ${found} 个有 ENS 名称`);
+}
+
 async function scanBlocks(provider, numBlocks = SCAN_BLOCKS) {
   const latest = await provider.getBlockNumber();
   const allArb = [];
@@ -645,6 +675,7 @@ async function main() {
     const prices = await fetchTokenPrices([...allTokens]);
     computePnl(arbTxs, prices);
     enrichSandwiches(sandwiches, prices);
+    await enrichSandwichesEns(provider, sandwiches);
 
     const pnlTxs = arbTxs.filter((t) => t.pnl_usd !== null);
     const totalPnl = pnlTxs.reduce((s, t) => s + t.pnl_usd, 0);
@@ -725,6 +756,7 @@ async function main() {
         const prices = await fetchTokenPrices([...allTokens]);
         computePnl(newArbs, prices);
         enrichSandwiches(newSandwiches, prices);
+        await enrichSandwichesEns(provider, newSandwiches);
       }
 
       // Merge arbs

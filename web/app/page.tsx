@@ -121,6 +121,7 @@ interface Sandwich {
   bot_profit_usd: number | null;
   bot_profit_amount?: string;
   bot_profit_token?: string;
+  bot_ens?: string;
   explorer_base: string;
   block_timestamp?: string;
 }
@@ -246,35 +247,17 @@ const CHAIN_TAB_OPTIONS: { id: ChainId; label: string }[] = [
   ...CHAINS.map((c) => ({ id: c.id, label: c.label })),
 ];
 
-const CHAIN_ICONS: Record<string, React.ReactNode> = {
-  all: (
-    <svg className="w-5 h-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="10" cy="10" r="7.5" />
-      <path d="M2.5 10h15M10 2.5c-2.2 2.2-3 4.6-3 7.5s.8 5.3 3 7.5M10 2.5c2.2 2.2 3 4.6 3 7.5s-.8 5.3-3 7.5" />
-    </svg>
-  ),
-  eth: (
-    <svg className="w-5 h-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round">
-      <path d="M10 2L5 10.5L10 8.5L15 10.5L10 2Z" />
-      <path d="M5 11.5L10 18L15 11.5L10 9.5L5 11.5Z" />
-    </svg>
-  ),
-  bsc: (
-    <svg className="w-5 h-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round">
-      <path d="M10 2L6 6L10 10L14 6Z" />
-      <path d="M3 10L6 7L10 11L6 15Z" />
-      <path d="M17 10L14 7L10 11L14 15Z" />
-      <path d="M10 12L6 16L10 18L14 16Z" />
-    </svg>
-  ),
-  sol: (
-    <svg className="w-5 h-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 14.5h11.5L17 17H5.5Z" />
-      <path d="M3 9.5h11.5L17 12H5.5Z" />
-      <path d="M17 5.5H5.5L3 3h11.5Z" />
-    </svg>
-  ),
-};
+const CHAIN_NAV_ITEMS: {
+  id: ChainId;
+  label: string;
+  color: string;
+  logo?: string;
+}[] = [
+  { id: "all", label: "All", color: "#d4a017" },
+  { id: "eth", label: "ETH", color: "#627eea", logo: "/chains/eth.png" },
+  { id: "bsc", label: "BNB", color: "#f0b90b", logo: "/chains/bsc.png" },
+  { id: "sol", label: "SOL", color: "#9945ff", logo: "/chains/sol.png" },
+];
 
 function BottomNav({
   active,
@@ -284,24 +267,40 @@ function BottomNav({
   onChange: (c: ChainId) => void;
 }) {
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-50 bg-[var(--color-bg)]/95 backdrop-blur-md border-t border-[var(--color-border)]">
+    <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-[var(--color-border)]" style={{ background: "rgba(9,9,11,0.95)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)" }}>
       <div className="max-w-screen-lg mx-auto flex">
-        {CHAIN_TAB_OPTIONS.map((c) => (
-          <button
-            key={c.id}
-            onClick={() => onChange(c.id)}
-            className={`flex-1 flex flex-col items-center gap-0.5 py-2 sm:py-2.5 transition-colors cursor-pointer ${
-              active === c.id
-                ? "text-[var(--color-accent)]"
-                : "text-[var(--color-text-dim)] hover:text-[var(--color-text-secondary)]"
-            }`}
-          >
-            {CHAIN_ICONS[c.id]}
-            <span className="text-[9px] sm:text-[10px] font-medium tracking-wide">
-              {c.id === "all" ? "All" : c.label}
-            </span>
-          </button>
-        ))}
+        {CHAIN_NAV_ITEMS.map((item) => {
+          const isActive = active === item.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => onChange(item.id)}
+              className={`flex-1 flex flex-col items-center gap-[3px] pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] transition-all duration-200 cursor-pointer relative ${
+                isActive ? "text-[var(--color-text)]" : "text-[rgba(255,255,255,0.35)]"
+              }`}
+            >
+              {isActive && (
+                <span className="absolute top-0 left-1/2 -translate-x-1/2 w-6 h-[2px] rounded-full bg-[var(--color-text)] transition-all duration-300" />
+              )}
+              {item.logo ? (
+                <img
+                  src={item.logo}
+                  alt={item.label}
+                  className={`w-[20px] h-[20px] rounded-full transition-opacity duration-200 ${isActive ? "opacity-100" : "opacity-30 grayscale"}`}
+                />
+              ) : (
+                <svg className="w-[20px] h-[20px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                  <line x1="4" y1="7" x2="20" y2="7" />
+                  <line x1="4" y1="12" x2="20" y2="12" />
+                  <line x1="4" y1="17" x2="20" y2="17" />
+                </svg>
+              )}
+              <span className={`text-[9px] sm:text-[10px] tracking-wide transition-all duration-200 ${isActive ? "font-semibold" : "font-medium"}`}>
+                {item.label}
+              </span>
+            </button>
+          );
+        })}
       </div>
     </nav>
   );
@@ -546,7 +545,11 @@ function SandwichCard({
         {/* Bottom row: bot address + victim count + expand hint */}
         <div className="flex flex-wrap items-center gap-x-2 sm:gap-x-3 gap-y-1 text-[10px] sm:text-[11px]">
           <span className="text-[var(--color-text-dim)]">
-            Bot: <span className="font-[family-name:var(--font-mono)]">{truncAddr(sw.bot_address, 6, 4)}</span>
+            Bot: {sw.bot_ens ? (
+              <span className="text-[var(--color-accent)]">{sw.bot_ens}</span>
+            ) : (
+              <span className="font-[family-name:var(--font-mono)]">{truncAddr(sw.bot_address, 6, 4)}</span>
+            )}
           </span>
           <span className="text-[var(--color-negative)]">
             {sw.victims.length} victim{sw.victims.length !== 1 ? "s" : ""}
@@ -692,6 +695,7 @@ export default function Page() {
   const [page, setPage] = useState(1);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [ensOnly, setEnsOnly] = useState(false);
   const [chartTf, setChartTf] = useState<TimeFrame>("all");
   const [tz, setTz] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
   const [historyData, setHistoryData] = useState<Record<string, Sandwich[]>>({ eth: [], bsc: [], sol: [] });
@@ -819,6 +823,7 @@ export default function Page() {
   const profitFilter = (sw: Sandwich) => {
     const p = sw.bot_profit_usd ?? 0;
     if (p < -10 || p > 1000) return false;
+    if (ensOnly && !sw.bot_ens) return false;
     if (hasDateFilter) {
       if (!sw.block_timestamp) return false;
       const t = new Date(sw.block_timestamp).getTime();
@@ -901,7 +906,7 @@ export default function Page() {
                 style={{ colorScheme: "dark" }}
               >
                 {TIMEZONES.map((t) => (
-                  <option key={t.value} value={t.value} style={{ background: "#1a1a2e", color: "#e0e0e0" }}>
+                  <option key={t.value} value={t.value} style={{ background: "#111113", color: "#d4d4d8" }}>
                     {t.short}
                   </option>
                 ))}
@@ -940,31 +945,6 @@ export default function Page() {
             </button>
           </div>
         </div>
-        {/* Date Range Filter */}
-        <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-3 sm:mt-4">
-          <span className="text-[10px] sm:text-[11px] text-[var(--color-text-dim)] uppercase tracking-wide">Date Range</span>
-          <input
-            type="date"
-            value={dateFrom}
-            onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
-            className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[4px] px-2 py-1 text-[11px] sm:text-[12px] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-accent-dim)] transition-colors font-[family-name:var(--font-mono)] [color-scheme:dark]"
-          />
-          <span className="text-[11px] text-[var(--color-text-dim)]">—</span>
-          <input
-            type="date"
-            value={dateTo}
-            onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
-            className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[4px] px-2 py-1 text-[11px] sm:text-[12px] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-accent-dim)] transition-colors font-[family-name:var(--font-mono)] [color-scheme:dark]"
-          />
-          {(dateFrom || dateTo) && (
-            <button
-              onClick={() => { setDateFrom(""); setDateTo(""); setPage(1); }}
-              className="text-[10px] sm:text-[11px] text-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors cursor-pointer"
-            >
-              Clear
-            </button>
-          )}
-        </div>
       </header>
 
       {/* MEV Stats — follows current chain + date/profit filter */}
@@ -972,31 +952,32 @@ export default function Page() {
         <h2 className="text-[12px] font-medium uppercase tracking-[0.06em] text-[var(--color-text-secondary)] mb-4">
           MEV Stats {chain !== "all" && <span className="normal-case">— {chainConfig!.label}</span>}
         </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-6">
-          <div className="bg-[var(--color-surface)] rounded-lg px-4 py-4 sm:p-5 text-center">
-            <div className="text-[10px] sm:text-[11px] text-[var(--color-text-dim)] uppercase tracking-wide mb-1.5 sm:mb-2">
-              Average Profit
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-5">
+          {[
+            { label: "Average Profit", value: sandwiches.length > 0 ? formatUsd(totalSandwichProfit / sandwiches.length) : "—", color: "var(--color-positive)" },
+            { label: "Total Profit", value: sandwiches.length > 0 ? formatUsd(totalSandwichProfit) : "—", color: "var(--color-positive)" },
+            { label: "Transactions Count", value: sandwiches.length.toLocaleString(), color: "var(--color-accent)" },
+          ].map((card) => (
+            <div
+              key={card.label}
+              className="rounded-[10px] px-4 py-4 sm:p-5 text-center"
+              style={{
+                background: "linear-gradient(168deg, #1a1a1f 0%, #131315 60%, #0f0f12 100%)",
+                borderTop: "1px solid rgba(255,255,255,0.07)",
+                borderLeft: "1px solid rgba(255,255,255,0.04)",
+                borderRight: "1px solid rgba(255,255,255,0.02)",
+                borderBottom: "1px solid rgba(255,255,255,0.01)",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.03)",
+              }}
+            >
+              <div className="text-[10px] sm:text-[11px] text-[var(--color-text-dim)] uppercase tracking-wide mb-1.5">
+                {card.label}
+              </div>
+              <div className="font-[family-name:var(--font-mono)] text-[20px] sm:text-[22px] font-bold tabular-nums" style={{ color: card.color }}>
+                {card.value}
+              </div>
             </div>
-            <div className="font-[family-name:var(--font-mono)] text-[20px] sm:text-[22px] font-bold tabular-nums text-[var(--color-positive)]">
-              {sandwiches.length > 0 ? formatUsd(totalSandwichProfit / sandwiches.length) : "—"}
-            </div>
-          </div>
-          <div className="bg-[var(--color-surface)] rounded-lg px-4 py-4 sm:p-5 text-center">
-            <div className="text-[10px] sm:text-[11px] text-[var(--color-text-dim)] uppercase tracking-wide mb-1.5 sm:mb-2">
-              Total Profit
-            </div>
-            <div className="font-[family-name:var(--font-mono)] text-[20px] sm:text-[22px] font-bold tabular-nums text-[var(--color-positive)]">
-              {sandwiches.length > 0 ? formatUsd(totalSandwichProfit) : "—"}
-            </div>
-          </div>
-          <div className="bg-[var(--color-surface)] rounded-lg px-4 py-4 sm:p-5 text-center">
-            <div className="text-[10px] sm:text-[11px] text-[var(--color-text-dim)] uppercase tracking-wide mb-1.5 sm:mb-2">
-              Transactions Count
-            </div>
-            <div className="font-[family-name:var(--font-mono)] text-[20px] sm:text-[22px] font-bold tabular-nums text-[var(--color-accent)]">
-              {sandwiches.length.toLocaleString()}
-            </div>
-          </div>
+          ))}
         </div>
       </section>
 
@@ -1253,6 +1234,41 @@ export default function Page() {
               </button>
             )}
           </div>
+        </div>
+
+        {/* Filters */}
+        <div className="flex items-center gap-2 sm:gap-3 mb-3 sm:mb-4 overflow-x-auto">
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
+            className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[4px] px-2 py-1 text-[11px] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-accent-dim)] transition-colors font-[family-name:var(--font-mono)] [color-scheme:dark] shrink-0"
+          />
+          <span className="text-[10px] text-[var(--color-text-dim)] shrink-0">to</span>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
+            className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[4px] px-2 py-1 text-[11px] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-accent-dim)] transition-colors font-[family-name:var(--font-mono)] [color-scheme:dark] shrink-0"
+          />
+          {(dateFrom || dateTo) && (
+            <button
+              onClick={() => { setDateFrom(""); setDateTo(""); setPage(1); }}
+              className="text-[10px] text-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors cursor-pointer shrink-0"
+            >
+              ✕
+            </button>
+          )}
+          <button
+            onClick={() => { setEnsOnly(!ensOnly); setPage(1); }}
+            className={`shrink-0 px-2.5 py-1 rounded-[4px] text-[10px] sm:text-[11px] font-medium border transition-colors cursor-pointer ${
+              ensOnly
+                ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-bg)]"
+                : "bg-[var(--color-surface)] border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-dim)]"
+            }`}
+          >
+            ENS Only
+          </button>
         </div>
 
         <div className="space-y-0">
