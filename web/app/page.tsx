@@ -1045,16 +1045,8 @@ export default function Page() {
       )
     : sandwiches;
 
-  const filtered = mevType === "arbitrage" ? filteredArb : [];
-  const totalPages = Math.max(
-    1,
-    Math.ceil(
-      (mevType === "arbitrage" ? filteredArb.length : filteredSandwich.length) /
-        PAGE_SIZE
-    )
-  );
+  const totalPages = Math.max(1, Math.ceil(filteredSandwich.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
-  const paged = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
   const pagedSandwiches = filteredSandwich.slice(
     (safePage - 1) * PAGE_SIZE,
     safePage * PAGE_SIZE
@@ -1115,7 +1107,7 @@ export default function Page() {
       </header>
 
       {/* Stats */}
-      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 sm:gap-6 mb-8 sm:mb-10 pb-6 sm:pb-8 border-b border-[var(--color-border)]">
+      <section className="grid grid-cols-2 sm:grid-cols-4 gap-4 sm:gap-6 mb-8 sm:mb-10 pb-6 sm:pb-8 border-b border-[var(--color-border)]">
         <Stat
           label="Sandwich Attacks"
           value={sandwiches.length}
@@ -1138,33 +1130,19 @@ export default function Page() {
           sub="per sandwich"
           color={totalSandwichProfit > 0 ? "var(--color-positive)" : undefined}
         />
-        <Stat
-          label="Arbitrage"
-          value={data.total_arbitrage_txs}
-          sub={pnlTxs.length > 0 ? `PnL ${formatUsd(totalPnl)}` : "no PnL data"}
-        />
       </section>
 
-      {/* Transactions */}
+      {/* Sandwich List */}
       <section>
         <div className="flex flex-col gap-2.5 sm:gap-0 sm:flex-row sm:items-center justify-between mb-3 sm:mb-4">
-          <div className="flex items-center gap-2 sm:gap-3">
-            <TypeTabs
-              active={mevType}
-              onChange={(t) => {
-                setMevType(t);
-                setPage(1);
-                setExpanded(null);
-              }}
-              arbCount={data.total_arbitrage_txs}
-              sandwichCount={sandwiches.length}
-            />
+          <h2 className="text-[12px] font-medium uppercase tracking-[0.06em] text-[var(--color-text-secondary)]">
+            Sandwich Attacks
             {q && (
-              <span className="text-[10px] sm:text-[11px] text-[var(--color-text-dim)]">
-                {mevType === "arbitrage" ? filteredArb.length : filteredSandwich.length} result{(mevType === "arbitrage" ? filteredArb.length : filteredSandwich.length) !== 1 ? "s" : ""}
+              <span className="normal-case tracking-normal ml-2 text-[var(--color-text-dim)]">
+                — {filteredSandwich.length} result{filteredSandwich.length !== 1 ? "s" : ""}
               </span>
             )}
-          </div>
+          </h2>
           <div className="relative w-full sm:w-64">
             <input
               type="text"
@@ -1173,7 +1151,7 @@ export default function Page() {
                 setSearch(e.target.value);
                 setPage(1);
               }}
-              placeholder="Search hash, address, token..."
+              placeholder="Search bot, victim, hash..."
               className="w-full bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[4px] px-3 py-1.5 text-[12px] text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:outline-none focus:border-[var(--color-accent-dim)] transition-colors font-[family-name:var(--font-mono)]"
             />
             {search && (
@@ -1190,87 +1168,28 @@ export default function Page() {
           </div>
         </div>
 
-        {mevType === "arbitrage" && (
-          <>
-            {/* Desktop: Table */}
-            <div className="hidden md:block overflow-x-auto">
-              <table className="w-full min-w-[860px] border-collapse">
-                <thead>
-                  <tr className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-dim)] border-b border-[var(--color-border)]">
-                    <th className="text-left font-normal py-2 pr-4 w-[180px]">Tx Hash</th>
-                    <th className="text-left font-normal py-2 pr-4 w-[90px]">
-                      {chain === "sol" ? "Slot" : "Block"}
-                    </th>
-                    <th className="text-left font-normal py-2 pr-4 w-[100px]">Swaps</th>
-                    <th className="text-left font-normal py-2 pr-4 w-[140px]">DEXes</th>
-                    <th className="text-right font-normal py-2 pr-4 w-[90px]">
-                      {chain === "sol" ? "Fee" : "Gas"}
-                    </th>
-                    <th className="text-right font-normal py-2 pr-4 w-[100px]">PnL</th>
-                    <th className="text-right font-normal py-2 w-[130px]">Links</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {paged.map((tx) => (
-                    <TxRow
-                      key={tx.tx_hash}
-                      tx={tx}
-                      chain={chainConfig}
-                      isExpanded={expanded === tx.tx_hash}
-                      onToggle={() => toggle(tx.tx_hash)}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Mobile: Cards */}
-            <div className="md:hidden">
-              {paged.map((tx) => (
-                <TxCard
-                  key={tx.tx_hash}
-                  tx={tx}
-                  chain={chainConfig}
-                  isExpanded={expanded === tx.tx_hash}
-                  onToggle={() => toggle(tx.tx_hash)}
-                />
-              ))}
-            </div>
-
-            {filteredArb.length === 0 && (
-              <div className="text-center py-16 text-[var(--color-text-dim)] text-sm">
-                {q ? `No results for "${q}"` : "No arbitrage transactions found. Crawler may still be syncing."}
-              </div>
-            )}
-          </>
-        )}
-
-        {mevType === "sandwich" && (
-          <>
-            <div className="space-y-0">
-              {pagedSandwiches.map((sw, i) => (
-                <SandwichCard
-                  key={sw.entry_tx.tx_hash + "-" + i}
-                  sw={sw}
-                  chain={chainConfig}
-                  isExpanded={expanded === sw.entry_tx.tx_hash}
-                  onToggle={() => toggle(sw.entry_tx.tx_hash)}
-                />
-              ))}
-            </div>
-            {filteredSandwich.length === 0 && (
-              <div className="text-center py-16 text-[var(--color-text-dim)] text-sm">
-                {q ? `No results for "${q}"` : "No sandwich attacks found. Crawler may still be syncing."}
-              </div>
-            )}
-          </>
+        <div className="space-y-0">
+          {pagedSandwiches.map((sw, i) => (
+            <SandwichCard
+              key={sw.entry_tx.tx_hash + "-" + i}
+              sw={sw}
+              chain={chainConfig}
+              isExpanded={expanded === sw.entry_tx.tx_hash}
+              onToggle={() => toggle(sw.entry_tx.tx_hash)}
+            />
+          ))}
+        </div>
+        {filteredSandwich.length === 0 && (
+          <div className="text-center py-16 text-[var(--color-text-dim)] text-sm">
+            {q ? `No results for "${q}"` : "No sandwich attacks found. Crawler may still be syncing."}
+          </div>
         )}
 
         {/* Pagination */}
         {totalPages > 1 && (
           <div className="flex items-center justify-between mt-4 pt-4 border-t border-[var(--color-border)]">
             <span className="text-[11px] text-[var(--color-text-dim)] tabular-nums">
-              {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, mevType === "arbitrage" ? filteredArb.length : filteredSandwich.length)} of {mevType === "arbitrage" ? filteredArb.length : filteredSandwich.length}
+              {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filteredSandwich.length)} of {filteredSandwich.length}
             </span>
             <div className="flex items-center gap-1">
               <PagerBtn
@@ -1302,55 +1221,13 @@ export default function Page() {
         )}
       </section>
 
-      {/* Relay Blocks Chart (ETH only) */}
-      {hasRelay && (
-        <section className="mt-10 sm:mt-12">
-          <h2 className="text-[12px] font-medium uppercase tracking-[0.06em] text-[var(--color-text-secondary)] mb-4">
-            Recent MEV-Boost Blocks
-          </h2>
-          <div className="flex gap-[2px] items-end h-12 sm:h-16">
-            {data.relay_blocks
-              .slice()
-              .reverse()
-              .map((b) => {
-                const h = Math.max(8, (b.value_eth / (maxMev || 1)) * 100);
-                return (
-                  <a
-                    key={b.slot}
-                    href={`${chainConfig.explorerTxUrl.replace("/tx/", "/block/")}${b.block_number}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title={`Block ${b.block_number}\n${b.value_eth.toFixed(4)} ETH`}
-                    className="flex-1 min-w-[4px] sm:min-w-[6px] rounded-[2px] transition-opacity hover:opacity-70"
-                    style={{
-                      height: `${h}%`,
-                      background:
-                        b.value_eth > avgMev * 2
-                          ? "var(--color-accent)"
-                          : b.value_eth > avgMev
-                            ? "var(--color-accent-dim)"
-                            : "var(--color-border-light)",
-                    }}
-                  />
-                );
-              })}
-          </div>
-          <div className="flex justify-between text-[10px] text-[var(--color-text-dim)] mt-2">
-            <span>
-              #{data.relay_blocks[data.relay_blocks.length - 1]?.block_number}
-            </span>
-            <span>#{data.relay_blocks[0]?.block_number}</span>
-          </div>
-        </section>
-      )}
-
       {/* Footer */}
       <footer className="mt-12 sm:mt-16 pb-6 sm:pb-8 text-[10px] text-[var(--color-text-dim)] border-t border-[var(--color-border)] pt-4">
         {chain === "eth"
-          ? "Data from Flashbots Relay API & on-chain Swap event scanning. Arbitrage = ≥2 Uniswap swaps in one tx. Sandwich = same bot front-runs & back-runs victim swaps on the same pool."
+          ? "On-chain Swap event scanning. Sandwich = same bot front-runs & back-runs victim swaps on the same pool within one block."
           : chain === "bsc"
-            ? "On-chain Swap event scanning on BSC. Arbitrage = ≥2 PancakeSwap swaps in one tx. Sandwich = same bot front-runs & back-runs victim swaps."
-            : "On-chain DEX instruction scanning on Solana. Arbitrage = ≥2 DEX swaps in one tx. Sandwich = same signer brackets victim swaps in the same block."}
+            ? "On-chain Swap event scanning on BSC. Sandwich = same bot front-runs & back-runs victim swaps on the same pool."
+            : "On-chain DEX instruction scanning on Solana. Sandwich = same signer brackets victim swaps in the same slot."}
       </footer>
     </div>
   );
