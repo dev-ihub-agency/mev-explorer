@@ -1,11 +1,8 @@
 /**
- * MEV Arbitrage Transaction Crawler
+ * MEV Arbitrage Transaction Crawler — BNB Chain (BSC)
  *
- * 数据源:
- *   1. Flashbots MEV-Boost Relay API — 高 MEV 价值区块信息
- *   2. eth_getBlockReceipts 链上扫描 — 从区块收据中识别多跳套利交易
- *
- * 输出: public/data.json
+ * 数据源: eth_getBlockReceipts 链上扫描 — 从区块收据中识别多跳套利交易
+ * 输出: OSS bsc/data.json
  */
 
 import { ethers } from "ethers";
@@ -15,32 +12,30 @@ import OSS from "ali-oss";
 
 // ---------- 配置 ----------
 
-const RELAY_API =
-  "https://boost-relay.flashbots.net/relay/v1/data/bidtraces/proposer_payload_delivered";
-
 const RPC_URL =
-  process.env.ETH_RPC_URL || "https://ethereum-rpc.publicnode.com";
+  process.env.BSC_RPC_URL || "https://bsc-rpc.publicnode.com";
 
-const OUTPUT_FILE = path.join("public", "data.json");
+const OUTPUT_FILE = path.join("public", "bsc-data.json");
 const SCAN_BLOCKS = 5;
 
-// Uniswap Swap event topic0
+// PancakeSwap / Uniswap fork Swap event topic0 (same as Uniswap)
 const V2_SWAP =
   "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822";
 const V3_SWAP =
   "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67";
 
-// ERC-20 Transfer(address,address,uint256)
 const ERC20_TRANSFER =
   "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 
 const DEFI_LLAMA_PRICE_API = "https://coins.llama.fi/prices/current";
+const PRICE_PREFIX = "bsc";
 
-// Stablecoin fallback prices (if API fails)
+const WBNB = "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c";
+
 const STABLECOIN_FALLBACK = {
-  "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": { price: 1, decimals: 6, symbol: "USDC" },
-  "0xdac17f958d2ee523a2206206994597c13d831ec7": { price: 1, decimals: 6, symbol: "USDT" },
-  "0x6b175474e89094c44da98b954eedeac495271d0f": { price: 1, decimals: 18, symbol: "DAI" },
+  "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d": { price: 1, decimals: 18, symbol: "USDC" },
+  "0x55d398326f99059ff775485246999027b3197955": { price: 1, decimals: 18, symbol: "USDT" },
+  "0xe9e7cea3dedca5984780bafc599bd69add087d56": { price: 1, decimals: 18, symbol: "BUSD" },
 };
 
 const log = (msg) => console.log(msg);
@@ -54,7 +49,7 @@ const ossClient = new OSS({
   bucket: process.env.ALIYUN_OSS_BUCKET || "mev-explorer-data",
 });
 
-const OSS_KEY = process.env.OSS_DATA_KEY || "eth/data.json";
+const OSS_KEY = "bsc/data.json";
 
 async function uploadToOSS(filePath) {
   try {
@@ -75,34 +70,12 @@ async function uploadToOSS(filePath) {
 function makeProvider() {
   const req = new ethers.FetchRequest(RPC_URL);
   req.timeout = 20_000;
-  return new ethers.JsonRpcProvider(req, 1, {
-    staticNetwork: ethers.Network.from("mainnet"),
+  return new ethers.JsonRpcProvider(req, 56, {
+    staticNetwork: ethers.Network.from(56),
   });
 }
 
-// ---------- 数据源 1: Relay API ----------
-
-async function fetchRelayBlocks(limit = 30) {
-  try {
-    const resp = await fetch(`${RELAY_API}?limit=${limit}`, {
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const items = await resp.json();
-    return items.map((item) => ({
-      slot: Number(item.slot),
-      block_number: Number(item.block_number),
-      block_hash: item.block_hash,
-      value_eth: parseFloat(ethers.formatEther(item.value)),
-      proposer_fee_recipient: item.proposer_fee_recipient,
-    }));
-  } catch (e) {
-    log(`  [!] Relay API 失败: ${e.message}`);
-    return [];
-  }
-}
-
-// ---------- 数据源 2: 链上扫描 ----------
+// ---------- 链上扫描 ----------
 
 function topicToAddr(topic) {
   return "0x" + topic.slice(-40).toLowerCase();
@@ -117,7 +90,6 @@ function analyzeReceipts(receipts, blockNumber) {
     for (const logEntry of receipt.logs ?? []) {
       const topic0 = logEntry.topics?.[0];
 
-      // Collect Swap events
       if (topic0 === V2_SWAP || topic0 === V3_SWAP) {
         if (!txMap.has(txHash)) {
           txMap.set(txHash, {
@@ -131,12 +103,11 @@ function analyzeReceipts(receipts, blockNumber) {
           });
         }
         txMap.get(txHash).swaps.push({
-          dex: topic0 === V2_SWAP ? "Uniswap V2" : "Uniswap V3",
+          dex: topic0 === V2_SWAP ? "PancakeSwap V2" : "PancakeSwap V3",
           pool: logEntry.address,
         });
       }
 
-      // Collect ERC-20 Transfer events
       if (
         topic0 === ERC20_TRANSFER &&
         logEntry.topics?.length === 3 &&
@@ -150,7 +121,6 @@ function analyzeReceipts(receipts, blockNumber) {
             .map((a) => a.toLowerCase())
         );
 
-        // Only track flows between the bot system and external addresses
         const fromIsBot = botAddrs.has(from);
         const toIsBot = botAddrs.has(to);
         if (fromIsBot !== toIsBot) {
@@ -167,7 +137,6 @@ function analyzeReceipts(receipts, blockNumber) {
           }
           const rawAmount = BigInt(logEntry.data);
           const tokenAddr = logEntry.address.toLowerCase();
-          // Inflow to bot system = positive, outflow = negative
           const direction = toIsBot ? 1n : -1n;
 
           txMap.get(txHash).transfers.push({
@@ -179,7 +148,6 @@ function analyzeReceipts(receipts, blockNumber) {
     }
   }
 
-  // ≥2 Swap = 套利
   const arbTxs = [];
   for (const [txHash, info] of txMap) {
     if (info.swaps.length < 2) continue;
@@ -188,14 +156,12 @@ function analyzeReceipts(receipts, blockNumber) {
     const gasPrice = info.effectiveGasPrice;
     const gasCostWei = BigInt(info.gasUsed) * gasPrice;
 
-    // Net token flows for the bot address
     const tokenFlows = new Map();
     for (const t of info.transfers) {
       const prev = tokenFlows.get(t.token) ?? 0n;
       tokenFlows.set(t.token, prev + t.amount);
     }
 
-    // Convert to serialisable format: { tokenAddr: netAmountRaw (string) }
     const netTokenFlows = {};
     for (const [token, amount] of tokenFlows) {
       if (amount !== 0n) {
@@ -218,8 +184,8 @@ function analyzeReceipts(receipts, blockNumber) {
       from_address: info.from ?? "",
       to_address: info.to ?? "",
       net_token_flows: netTokenFlows,
-      etherscan_url: `https://etherscan.io/tx/${txHash}`,
-      eigenphi_url: `https://eigenphi.io/mev/eigentx/${txHash}`,
+      etherscan_url: `https://bscscan.com/tx/${txHash}`,
+      eigenphi_url: `https://eigenphi.io/mev/eigentx/${txHash}?chain=bsc`,
     });
   }
 
@@ -262,7 +228,7 @@ async function fetchTokenPrices(tokenAddrs) {
 
   for (let i = 0; i < tokenAddrs.length; i += BATCH) {
     const batch = tokenAddrs.slice(i, i + BATCH);
-    const ids = batch.map((a) => `ethereum:${a}`).join(",");
+    const ids = batch.map((a) => `${PRICE_PREFIX}:${a}`).join(",");
     try {
       const resp = await fetch(`${DEFI_LLAMA_PRICE_API}/${ids}`, {
         signal: AbortSignal.timeout(10_000),
@@ -270,7 +236,7 @@ async function fetchTokenPrices(tokenAddrs) {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
       for (const [key, info] of Object.entries(data.coins ?? {})) {
-        const addr = key.replace("ethereum:", "").toLowerCase();
+        const addr = key.replace(`${PRICE_PREFIX}:`, "").toLowerCase();
         prices[addr] = {
           price: info.price,
           decimals: info.decimals,
@@ -282,7 +248,6 @@ async function fetchTokenPrices(tokenAddrs) {
     }
   }
 
-  // Stablecoin fallback
   for (const [addr, info] of Object.entries(STABLECOIN_FALLBACK)) {
     if (!prices[addr]) prices[addr] = info;
   }
@@ -291,8 +256,7 @@ async function fetchTokenPrices(tokenAddrs) {
 }
 
 function computePnl(arbTxs, prices) {
-  const ethAddr = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
-  const ethPrice = prices[ethAddr]?.price ?? 0;
+  const nativePrice = prices[WBNB]?.price ?? 0;
 
   for (const tx of arbTxs) {
     const flows = tx.net_token_flows ?? {};
@@ -300,19 +264,15 @@ function computePnl(arbTxs, prices) {
 
     if (entries.length === 0) {
       tx.revenue_usd = null;
-      tx.gas_cost_usd = ethPrice > 0 ? Math.round(tx.gas_cost_eth * ethPrice * 100) / 100 : null;
+      tx.gas_cost_usd = nativePrice > 0 ? Math.round(tx.gas_cost_eth * nativePrice * 100) / 100 : null;
       tx.pnl_usd = null;
       tx.profit_token = null;
       tx.profit_token_amount = null;
-      tx.eth_price_usd = ethPrice;
+      tx.native_price_usd = nativePrice;
       continue;
     }
 
-    // Check if all flows are outflows (negative) — means profit is native ETH
-    const hasAnyInflow = entries.some(([token, rawStr]) => {
-      const raw = BigInt(rawStr);
-      return raw > 0n;
-    });
+    const hasAnyInflow = entries.some(([, rawStr]) => BigInt(rawStr) > 0n);
 
     let revenueUsd = 0;
     let profitToken = null;
@@ -337,69 +297,45 @@ function computePnl(arbTxs, prices) {
       }
     }
 
-    const gasCostUsd = tx.gas_cost_eth * ethPrice;
+    const gasCostUsd = tx.gas_cost_eth * nativePrice;
 
-    // If all flows are outflows, profit is likely native ETH — can't compute
     if (!hasAnyInflow) {
       tx.revenue_usd = null;
-      tx.gas_cost_usd = ethPrice > 0 ? Math.round(gasCostUsd * 100) / 100 : null;
+      tx.gas_cost_usd = nativePrice > 0 ? Math.round(gasCostUsd * 100) / 100 : null;
       tx.pnl_usd = null;
       tx.profit_token = null;
       tx.profit_token_amount = null;
-      tx.eth_price_usd = ethPrice;
+      tx.native_price_usd = nativePrice;
       continue;
     }
 
     const pnlUsd = revenueUsd - gasCostUsd;
 
     tx.revenue_usd = hasPriceData ? Math.round(revenueUsd * 100) / 100 : null;
-    tx.gas_cost_usd = ethPrice > 0 ? Math.round(gasCostUsd * 100) / 100 : null;
-    tx.pnl_usd = hasPriceData && ethPrice > 0 ? Math.round(pnlUsd * 100) / 100 : null;
+    tx.gas_cost_usd = nativePrice > 0 ? Math.round(gasCostUsd * 100) / 100 : null;
+    tx.pnl_usd = hasPriceData && nativePrice > 0 ? Math.round(pnlUsd * 100) / 100 : null;
     tx.profit_token = profitToken;
     tx.profit_token_amount =
-      profitTokenAmount !== 0
-        ? Math.round(profitTokenAmount * 1e8) / 1e8
-        : null;
-    tx.eth_price_usd = ethPrice;
+      profitTokenAmount !== 0 ? Math.round(profitTokenAmount * 1e8) / 1e8 : null;
+    tx.native_price_usd = nativePrice;
   }
 }
 
 // ---------- main ----------
 
-const WEB_OUTPUT = path.join("web", "public", "data.json");
-const WATCH_INTERVAL = 12_000;
+const WATCH_INTERVAL = 5_000;
 
 async function saveOutput(output) {
   fs.mkdirSync("public", { recursive: true });
   fs.writeFileSync(OUTPUT_FILE, JSON.stringify(output, null, 2), "utf-8");
-  fs.mkdirSync(path.join("web", "public"), { recursive: true });
-  fs.writeFileSync(WEB_OUTPUT, JSON.stringify(output, null, 2), "utf-8");
   await uploadToOSS(OUTPUT_FILE);
-}
-
-async function runOnce(provider) {
-  const relayBlocks = await fetchRelayBlocks(30);
-  const arbTxs = await scanBlocks(provider, SCAN_BLOCKS);
-  arbTxs.sort((a, b) => b.swap_count - a.swap_count);
-
-  const allTokens = new Set();
-  allTokens.add("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2");
-  for (const tx of arbTxs) {
-    for (const token of Object.keys(tx.net_token_flows ?? {})) {
-      allTokens.add(token);
-    }
-  }
-  const prices = await fetchTokenPrices([...allTokens]);
-  computePnl(arbTxs, prices);
-
-  return { relayBlocks, arbTxs };
 }
 
 async function main() {
   const isWatch = process.argv.includes("--watch");
 
   log("=".repeat(55));
-  log(`  MEV Arbitrage Crawler${isWatch ? " (watch mode)" : ""}`);
+  log(`  MEV Arbitrage Crawler — BSC${isWatch ? " (watch mode)" : ""}`);
   log("=".repeat(55));
 
   const provider = makeProvider();
@@ -407,18 +343,13 @@ async function main() {
   log(`  RPC 已连接, 当前区块: ${bn}`);
 
   if (!isWatch) {
-    // ---- 单次运行 ----
-    log("\n[1/3] 从 Flashbots Relay 获取高价值 MEV 区块...");
-    const relayBlocks = await fetchRelayBlocks(30);
-    log(`  ✓ ${relayBlocks.length} 个区块`);
-
-    log("\n[2/3] 链上扫描最近区块...");
+    log("\n[1/2] 链上扫描最近区块...");
     let arbTxs = await scanBlocks(provider, SCAN_BLOCKS);
     log(`  ✓ ${arbTxs.length} 笔套利交易`);
     arbTxs.sort((a, b) => b.swap_count - a.swap_count);
 
-    log("\n[3/3] 查询价格 & 计算 PnL...");
-    const allTokens = new Set(["0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"]);
+    log("\n[2/2] 查询价格 & 计算 PnL...");
+    const allTokens = new Set([WBNB]);
     for (const tx of arbTxs) {
       for (const token of Object.keys(tx.net_token_flows ?? {})) allTokens.add(token);
     }
@@ -431,9 +362,10 @@ async function main() {
 
     await saveOutput({
       updated_at: new Date().toISOString(),
+      chain: "bsc",
       scan_blocks: SCAN_BLOCKS,
       total_arbitrage_txs: arbTxs.length,
-      relay_blocks: relayBlocks.slice(0, 15),
+      relay_blocks: [],
       transactions: arbTxs,
     });
 
@@ -458,9 +390,6 @@ async function main() {
       const ts = new Date().toLocaleTimeString();
       log(`\n[${ts}] 新区块 ${currentBlock} (扫描 ${blocksToScan} 个)...`);
 
-      const relayBlocks = await fetchRelayBlocks(15);
-
-      // Scan only the new blocks
       const newArbs = [];
       for (let i = 0; i < blocksToScan; i++) {
         const blockNum = currentBlock - i;
@@ -478,9 +407,8 @@ async function main() {
         }
       }
 
-      // Price & PnL
       if (newArbs.length > 0) {
-        const allTokens = new Set(["0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"]);
+        const allTokens = new Set([WBNB]);
         for (const tx of newArbs) {
           for (const token of Object.keys(tx.net_token_flows ?? {})) allTokens.add(token);
         }
@@ -488,7 +416,6 @@ async function main() {
         computePnl(newArbs, prices);
       }
 
-      // Merge: prepend new, deduplicate, cap at MAX_TXS
       const seen = new Set();
       const merged = [];
       for (const tx of [...newArbs, ...allTxs]) {
@@ -501,9 +428,10 @@ async function main() {
 
       await saveOutput({
         updated_at: new Date().toISOString(),
+        chain: "bsc",
         scan_blocks: blocksToScan,
         total_arbitrage_txs: allTxs.length,
-        relay_blocks: relayBlocks.slice(0, 15),
+        relay_blocks: [],
         transactions: allTxs,
       });
 
@@ -515,10 +443,8 @@ async function main() {
     }
   }
 
-  // Initial run
   await tick();
 
-  // Loop
   log(`\n  进入 watch 模式, 每 ${WATCH_INTERVAL / 1000}s 检查新区块...`);
   log("  按 Ctrl+C 退出\n");
   setInterval(tick, WATCH_INTERVAL);

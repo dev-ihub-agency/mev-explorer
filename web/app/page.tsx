@@ -4,6 +4,54 @@ import { useEffect, useState, useCallback } from "react";
 
 // ─── Types ───
 
+type ChainId = "eth" | "bsc" | "sol";
+
+interface ChainConfig {
+  id: ChainId;
+  label: string;
+  nativeSymbol: string;
+  explorerLabel: string;
+  explorerTxUrl: string;
+  explorerAddrUrl: string;
+  secondaryExplorerLabel: string;
+  secondaryExplorerUrl: (hash: string) => string;
+}
+
+const CHAINS: ChainConfig[] = [
+  {
+    id: "eth",
+    label: "Ethereum",
+    nativeSymbol: "ETH",
+    explorerLabel: "Etherscan",
+    explorerTxUrl: "https://etherscan.io/tx/",
+    explorerAddrUrl: "https://etherscan.io/address/",
+    secondaryExplorerLabel: "EigenPhi",
+    secondaryExplorerUrl: (h) => `https://eigenphi.io/mev/eigentx/${h}`,
+  },
+  {
+    id: "bsc",
+    label: "BSC",
+    nativeSymbol: "BNB",
+    explorerLabel: "BscScan",
+    explorerTxUrl: "https://bscscan.com/tx/",
+    explorerAddrUrl: "https://bscscan.com/address/",
+    secondaryExplorerLabel: "EigenPhi",
+    secondaryExplorerUrl: (h) =>
+      `https://eigenphi.io/mev/eigentx/${h}?chain=bsc`,
+  },
+  {
+    id: "sol",
+    label: "Solana",
+    nativeSymbol: "SOL",
+    explorerLabel: "Solscan",
+    explorerTxUrl: "https://solscan.io/tx/",
+    explorerAddrUrl: "https://solscan.io/account/",
+    secondaryExplorerLabel: "Jito",
+    secondaryExplorerUrl: (h) =>
+      `https://explorer.jito.wtf/bundle/${h}`,
+  },
+];
+
 interface Transaction {
   tx_hash: string;
   block_number: number;
@@ -24,7 +72,8 @@ interface Transaction {
   pnl_usd: number | null;
   profit_token: string | null;
   profit_token_amount: number | null;
-  eth_price_usd: number;
+  eth_price_usd?: number;
+  native_price_usd?: number;
 }
 
 interface RelayBlock {
@@ -41,12 +90,23 @@ interface Data {
   total_arbitrage_txs: number;
   relay_blocks: RelayBlock[];
   transactions: Transaction[];
+  chain?: string;
 }
 
 // ─── Helpers ───
 
+const OSS_BASE =
+  process.env.NEXT_PUBLIC_OSS_BASE ||
+  "https://mev-explorer-data.oss-ap-southeast-1.aliyuncs.com";
+
+function dataUrlForChain(chain: ChainId) {
+  return `${OSS_BASE}/${chain}/data.json`;
+}
+
 function truncHash(hash: string) {
-  return `${hash.slice(0, 10)}...${hash.slice(-8)}`;
+  if (hash.length > 20)
+    return `${hash.slice(0, 10)}...${hash.slice(-8)}`;
+  return hash;
 }
 
 function truncAddr(addr: string, head = 6, tail = 4) {
@@ -81,6 +141,32 @@ function pnlColor(pnl: number | null) {
 
 // ─── Shared Components ───
 
+function ChainTabs({
+  active,
+  onChange,
+}: {
+  active: ChainId;
+  onChange: (c: ChainId) => void;
+}) {
+  return (
+    <div className="flex gap-1 p-0.5 bg-[var(--color-surface)] rounded-[5px]">
+      {CHAINS.map((c) => (
+        <button
+          key={c.id}
+          onClick={() => onChange(c.id)}
+          className={`px-3 py-1.5 text-[12px] font-medium rounded-[4px] transition-colors cursor-pointer ${
+            active === c.id
+              ? "bg-[var(--color-accent)] text-[var(--color-bg)]"
+              : "text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]"
+          }`}
+        >
+          {c.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function Stat({
   label,
   value,
@@ -113,7 +199,7 @@ function Stat({
 }
 
 function DexBadge({ name }: { name: string }) {
-  const isV3 = name.includes("V3");
+  const isV3 = name.includes("V3") || name.includes("CLMM") || name.includes("Whirlpool");
   return (
     <span
       className="inline-block text-[10px] font-medium tracking-wide px-[6px] py-[2px] rounded-[3px] mr-1 mb-0.5"
@@ -177,26 +263,34 @@ function Detail({
   );
 }
 
-function ExternalLinks({ tx, className }: { tx: Transaction; className?: string }) {
+function ExternalLinks({
+  tx,
+  chain,
+  className,
+}: {
+  tx: Transaction;
+  chain: ChainConfig;
+  className?: string;
+}) {
   return (
     <span className={`inline-flex gap-3 text-[11px] ${className ?? ""}`}>
       <a
-        href={tx.etherscan_url}
+        href={`${chain.explorerTxUrl}${tx.tx_hash}`}
         target="_blank"
         rel="noopener noreferrer"
         onClick={(e) => e.stopPropagation()}
         className="text-[var(--color-text-dim)] hover:text-[var(--color-accent)] active:text-[var(--color-accent)] transition-colors"
       >
-        Etherscan ↗
+        {chain.explorerLabel} ↗
       </a>
       <a
-        href={tx.eigenphi_url}
+        href={chain.secondaryExplorerUrl(tx.tx_hash)}
         target="_blank"
         rel="noopener noreferrer"
         onClick={(e) => e.stopPropagation()}
         className="text-[var(--color-text-dim)] hover:text-[var(--color-accent)] active:text-[var(--color-accent)] transition-colors"
       >
-        EigenPhi ↗
+        {chain.secondaryExplorerLabel} ↗
       </a>
     </span>
   );
@@ -254,7 +348,13 @@ function PnlBreakdown({ tx }: { tx: Transaction }) {
   );
 }
 
-function ExpandedDetails({ tx }: { tx: Transaction }) {
+function ExpandedDetails({
+  tx,
+  chain,
+}: {
+  tx: Transaction;
+  chain: ChainConfig;
+}) {
   return (
     <div className="px-3 sm:px-5 py-4 bg-[var(--color-surface)]">
       <PnlBreakdown tx={tx} />
@@ -267,13 +367,21 @@ function ExpandedDetails({ tx }: { tx: Transaction }) {
         <Detail label="From" mono>
           {tx.from_address || "—"}
         </Detail>
-        <Detail label="To (Contract)" mono>
-          {tx.to_address || "—"}
-        </Detail>
+        {tx.to_address && (
+          <Detail label="To (Contract)" mono>
+            {tx.to_address}
+          </Detail>
+        )}
         <Detail label="Source">{tx.source}</Detail>
-        <Detail label="Gas Used">{tx.gas_used.toLocaleString()}</Detail>
-        <Detail label="Gas Price">{tx.gas_price_gwei} Gwei</Detail>
-        <Detail label="Gas Cost">{tx.gas_cost_eth.toFixed(6)} ETH</Detail>
+        <Detail label={chain.id === "sol" ? "Compute Units" : "Gas Used"}>
+          {tx.gas_used.toLocaleString()}
+        </Detail>
+        {chain.id !== "sol" && (
+          <Detail label="Gas Price">{tx.gas_price_gwei} Gwei</Detail>
+        )}
+        <Detail label={chain.id === "sol" ? "Fee" : "Gas Cost"}>
+          {tx.gas_cost_eth.toFixed(6)} {chain.nativeSymbol}
+        </Detail>
         {tx.pools && tx.pools.length > 0 && (
           <div className="sm:col-span-2 lg:col-span-3 mt-1">
             <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wide">
@@ -283,7 +391,7 @@ function ExpandedDetails({ tx }: { tx: Transaction }) {
               {tx.pools.map((p, i) => (
                 <a
                   key={i}
-                  href={`https://etherscan.io/address/${p}`}
+                  href={`${chain.explorerAddrUrl}${p}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-accent)] bg-[var(--color-surface-hover)] px-2 py-1 rounded-[3px] transition-colors"
@@ -303,10 +411,12 @@ function ExpandedDetails({ tx }: { tx: Transaction }) {
 
 function TxCard({
   tx,
+  chain,
   isExpanded,
   onToggle,
 }: {
   tx: Transaction;
+  chain: ChainConfig;
   isExpanded: boolean;
   onToggle: () => void;
 }) {
@@ -316,7 +426,6 @@ function TxCard({
         className="px-1 py-3 cursor-pointer active:bg-[var(--color-surface)] transition-colors"
         onClick={onToggle}
       >
-        {/* Row 1: Hash + PnL */}
         <div className="flex items-start justify-between gap-2 mb-2">
           <span className="font-[family-name:var(--font-mono)] text-[13px] text-[var(--color-text)]">
             {truncHash(tx.tx_hash)}
@@ -329,7 +438,6 @@ function TxCard({
           </span>
         </div>
 
-        {/* Row 2: Metadata chips */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
           <span className="font-[family-name:var(--font-mono)] text-[var(--color-text-secondary)] tabular-nums">
             #{tx.block_number}
@@ -351,13 +459,12 @@ function TxCard({
           )}
         </div>
 
-        {/* Row 3: Links */}
         <div className="mt-2">
-          <ExternalLinks tx={tx} />
+          <ExternalLinks tx={tx} chain={chain} />
         </div>
       </div>
 
-      {isExpanded && <ExpandedDetails tx={tx} />}
+      {isExpanded && <ExpandedDetails tx={tx} chain={chain} />}
     </div>
   );
 }
@@ -366,10 +473,12 @@ function TxCard({
 
 function TxRow({
   tx,
+  chain,
   isExpanded,
   onToggle,
 }: {
   tx: Transaction;
+  chain: ChainConfig;
   isExpanded: boolean;
   onToggle: () => void;
 }) {
@@ -421,13 +530,13 @@ function TxRow({
           )}
         </td>
         <td className="py-3 text-right">
-          <ExternalLinks tx={tx} />
+          <ExternalLinks tx={tx} chain={chain} />
         </td>
       </tr>
       {isExpanded && (
         <tr>
           <td colSpan={7} className="p-0">
-            <ExpandedDetails tx={tx} />
+            <ExpandedDetails tx={tx} chain={chain} />
           </td>
         </tr>
       )}
@@ -478,6 +587,7 @@ function pageNumbers(current: number, total: number): (number | "...")[] {
 // ─── Main Page ───
 
 export default function Page() {
+  const [chain, setChain] = useState<ChainId>("eth");
   const [data, setData] = useState<Data | null>(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -486,10 +596,13 @@ export default function Page() {
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 20;
 
+  const chainConfig = CHAINS.find((c) => c.id === chain)!;
+
   const load = useCallback(async () => {
     try {
-      const dataUrl = process.env.NEXT_PUBLIC_DATA_URL || "/data.json";
-      const res = await fetch(dataUrl + "?" + Date.now());
+      const url = dataUrlForChain(chain);
+      const res = await fetch(url + "?" + Date.now());
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json: Data = await res.json();
       setData(json);
     } catch (e) {
@@ -497,11 +610,16 @@ export default function Page() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [chain]);
 
   useEffect(() => {
+    setData(null);
+    setLoading(true);
+    setExpanded(null);
+    setSearch("");
+    setPage(1);
     load();
-  }, [load]);
+  }, [chain, load]);
 
   useEffect(() => {
     if (!autoRefresh) return;
@@ -516,7 +634,8 @@ export default function Page() {
 
   if (loading && !data) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4">
+        <ChainTabs active={chain} onChange={setChain} />
         <div className="text-[var(--color-text-dim)] text-sm">Loading...</div>
       </div>
     );
@@ -524,18 +643,20 @@ export default function Page() {
 
   if (!data) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4">
+        <ChainTabs active={chain} onChange={setChain} />
         <div className="text-[var(--color-negative)] text-sm">
-          Failed to load data. Run the crawler first.
+          No data available for {chainConfig.label}. Crawler may not be running yet.
         </div>
       </div>
     );
   }
 
-  const maxMev = data.relay_blocks.length
+  const hasRelay = data.relay_blocks && data.relay_blocks.length > 0;
+  const maxMev = hasRelay
     ? Math.max(...data.relay_blocks.map((b) => b.value_eth))
     : 0;
-  const avgMev = data.relay_blocks.length
+  const avgMev = hasRelay
     ? data.relay_blocks.reduce((s, b) => s + b.value_eth, 0) /
       data.relay_blocks.length
     : 0;
@@ -544,36 +665,39 @@ export default function Page() {
   const totalPnl = pnlTxs.reduce((s, t) => s + (t.pnl_usd ?? 0), 0);
   const profitableTxs = pnlTxs.filter((t) => (t.pnl_usd ?? 0) > 0);
 
-  // Search filter
   const q = search.trim().toLowerCase();
   const filtered = q
     ? data.transactions.filter(
         (tx) =>
           tx.tx_hash.toLowerCase().includes(q) ||
           tx.from_address.toLowerCase().includes(q) ||
-          tx.to_address.toLowerCase().includes(q) ||
+          (tx.to_address ?? "").toLowerCase().includes(q) ||
           tx.block_number.toString().includes(q) ||
           (tx.profit_token ?? "").toLowerCase().includes(q) ||
           tx.dex_list.some((d) => d.toLowerCase().includes(q))
       )
     : data.transactions;
 
-  // Pagination
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const paged = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
+  const blockLabel = chain === "sol" ? "slots" : "blocks";
+
   return (
     <div className="min-h-screen px-3 py-6 sm:px-6 sm:py-8 md:px-8 lg:px-16 max-w-[1440px] mx-auto">
       {/* Header */}
-      <header className="flex items-start sm:items-end justify-between gap-3 mb-8 sm:mb-10">
-        <div>
-          <h1 className="text-[15px] font-semibold tracking-tight leading-none">
-            MEV Scanner
-          </h1>
-          <p className="text-[11px] text-[var(--color-text-dim)] mt-1.5 tracking-wide">
-            Arbitrage transactions on Ethereum
-          </p>
+      <header className="flex flex-col sm:flex-row items-start sm:items-end justify-between gap-3 mb-8 sm:mb-10">
+        <div className="flex items-center gap-4">
+          <div>
+            <h1 className="text-[15px] font-semibold tracking-tight leading-none">
+              MEV Scanner
+            </h1>
+            <p className="text-[11px] text-[var(--color-text-dim)] mt-1.5 tracking-wide">
+              Arbitrage transactions on {chainConfig.label}
+            </p>
+          </div>
+          <ChainTabs active={chain} onChange={setChain} />
         </div>
         <div className="flex items-center gap-2 sm:gap-4 shrink-0">
           {autoRefresh && (
@@ -609,7 +733,7 @@ export default function Page() {
         <Stat
           label="Arbitrage Txs"
           value={data.total_arbitrage_txs}
-          sub={`from ${data.scan_blocks} blocks`}
+          sub={`from ${data.scan_blocks} ${blockLabel}`}
         />
         <Stat
           label="Total PnL"
@@ -622,16 +746,44 @@ export default function Page() {
           value={`${profitableTxs.length} / ${pnlTxs.length}`}
           sub="with PnL data"
         />
-        <Stat
-          label="Peak MEV"
-          value={`${maxMev.toFixed(4)} Ξ`}
-          sub="per block (relay)"
-        />
-        <Stat
-          label="Avg MEV / Block"
-          value={`${avgMev.toFixed(4)} Ξ`}
-          sub={`${data.relay_blocks.length} blocks`}
-        />
+        {hasRelay ? (
+          <>
+            <Stat
+              label="Peak MEV"
+              value={`${maxMev.toFixed(4)} Ξ`}
+              sub="per block (relay)"
+            />
+            <Stat
+              label="Avg MEV / Block"
+              value={`${avgMev.toFixed(4)} Ξ`}
+              sub={`${data.relay_blocks.length} blocks`}
+            />
+          </>
+        ) : (
+          <>
+            <Stat
+              label="Avg Swaps / Tx"
+              value={
+                pnlTxs.length > 0
+                  ? (
+                      data.transactions.reduce(
+                        (s, t) => s + (t.swap_count ?? 0),
+                        0
+                      ) / data.transactions.length
+                    ).toFixed(1)
+                  : "—"
+              }
+              sub="per arbitrage tx"
+            />
+            <Stat
+              label="DEXes"
+              value={
+                new Set(data.transactions.flatMap((t) => t.dex_list)).size
+              }
+              sub="unique protocols"
+            />
+          </>
+        )}
       </section>
 
       {/* Transactions */}
@@ -645,7 +797,6 @@ export default function Page() {
               </span>
             )}
           </h2>
-          {/* Search */}
           <div className="relative w-full sm:w-64">
             <input
               type="text"
@@ -677,10 +828,14 @@ export default function Page() {
             <thead>
               <tr className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-dim)] border-b border-[var(--color-border)]">
                 <th className="text-left font-normal py-2 pr-4 w-[180px]">Tx Hash</th>
-                <th className="text-left font-normal py-2 pr-4 w-[90px]">Block</th>
+                <th className="text-left font-normal py-2 pr-4 w-[90px]">
+                  {chain === "sol" ? "Slot" : "Block"}
+                </th>
                 <th className="text-left font-normal py-2 pr-4 w-[100px]">Swaps</th>
                 <th className="text-left font-normal py-2 pr-4 w-[140px]">DEXes</th>
-                <th className="text-right font-normal py-2 pr-4 w-[90px]">Gas</th>
+                <th className="text-right font-normal py-2 pr-4 w-[90px]">
+                  {chain === "sol" ? "Fee" : "Gas"}
+                </th>
                 <th className="text-right font-normal py-2 pr-4 w-[100px]">PnL</th>
                 <th className="text-right font-normal py-2 w-[130px]">Links</th>
               </tr>
@@ -690,6 +845,7 @@ export default function Page() {
                 <TxRow
                   key={tx.tx_hash}
                   tx={tx}
+                  chain={chainConfig}
                   isExpanded={expanded === tx.tx_hash}
                   onToggle={() => toggle(tx.tx_hash)}
                 />
@@ -704,6 +860,7 @@ export default function Page() {
             <TxCard
               key={tx.tx_hash}
               tx={tx}
+              chain={chainConfig}
               isExpanded={expanded === tx.tx_hash}
               onToggle={() => toggle(tx.tx_hash)}
             />
@@ -712,7 +869,7 @@ export default function Page() {
 
         {filtered.length === 0 && (
           <div className="text-center py-16 text-[var(--color-text-dim)] text-sm">
-            {q ? `No results for "${q}"` : "No arbitrage transactions found. Try running the crawler again."}
+            {q ? `No results for "${q}"` : "No arbitrage transactions found. Crawler may still be syncing."}
           </div>
         )}
 
@@ -752,8 +909,8 @@ export default function Page() {
         )}
       </section>
 
-      {/* Relay Blocks Chart */}
-      {data.relay_blocks.length > 0 && (
+      {/* Relay Blocks Chart (ETH only) */}
+      {hasRelay && (
         <section className="mt-10 sm:mt-12">
           <h2 className="text-[12px] font-medium uppercase tracking-[0.06em] text-[var(--color-text-secondary)] mb-4">
             Recent MEV-Boost Blocks
@@ -767,7 +924,7 @@ export default function Page() {
                 return (
                   <a
                     key={b.slot}
-                    href={`https://etherscan.io/block/${b.block_number}`}
+                    href={`${chainConfig.explorerTxUrl.replace("/tx/", "/block/")}${b.block_number}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     title={`Block ${b.block_number}\n${b.value_eth.toFixed(4)} ETH`}
@@ -796,8 +953,11 @@ export default function Page() {
 
       {/* Footer */}
       <footer className="mt-12 sm:mt-16 pb-6 sm:pb-8 text-[10px] text-[var(--color-text-dim)] border-t border-[var(--color-border)] pt-4">
-        Data from Flashbots Relay API & on-chain Swap event scanning.
-        Arbitrage = ≥2 Uniswap swaps in a single transaction.
+        {chain === "eth"
+          ? "Data from Flashbots Relay API & on-chain Swap event scanning. Arbitrage = ≥2 Uniswap swaps in a single transaction."
+          : chain === "bsc"
+            ? "On-chain Swap event scanning on BSC. Arbitrage = ≥2 PancakeSwap swaps in a single transaction."
+            : "On-chain DEX instruction scanning on Solana. Arbitrage = ≥2 DEX swaps in a single transaction."}
       </footer>
     </div>
   );
