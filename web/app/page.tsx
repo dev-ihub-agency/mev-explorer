@@ -84,12 +84,46 @@ interface RelayBlock {
   proposer_fee_recipient: string;
 }
 
+interface SandwichTxInfo {
+  tx_hash: string;
+  token_in: string;
+  token_in_symbol?: string;
+  amount_in: string;
+  amount_in_formatted?: string;
+  token_out: string;
+  token_out_symbol?: string;
+  amount_out: string;
+  amount_out_formatted?: string;
+}
+
+interface SandwichVictim extends SandwichTxInfo {
+  from_address: string;
+}
+
+interface Sandwich {
+  type: "sandwich";
+  block_number: number;
+  bot_address: string;
+  pool: string;
+  dex: string;
+  entry_tx: SandwichTxInfo;
+  exit_tx: SandwichTxInfo;
+  victims: SandwichVictim[];
+  bot_profit_usd: number | null;
+  bot_profit_amount?: string;
+  bot_profit_token?: string;
+  explorer_base: string;
+}
+
+type MevType = "arbitrage" | "sandwich";
+
 interface Data {
   updated_at: string;
   scan_blocks: number;
   total_arbitrage_txs: number;
   relay_blocks: RelayBlock[];
   transactions: Transaction[];
+  sandwiches?: Sandwich[];
   chain?: string;
 }
 
@@ -237,6 +271,270 @@ function SwapDots({ count }: { count: number }) {
         </span>
       )}
     </span>
+  );
+}
+
+function TypeTabs({
+  active,
+  onChange,
+  arbCount,
+  sandwichCount,
+}: {
+  active: MevType;
+  onChange: (t: MevType) => void;
+  arbCount: number;
+  sandwichCount: number;
+}) {
+  const tabs: { id: MevType; label: string; count: number }[] = [
+    { id: "arbitrage", label: "Arbitrage", count: arbCount },
+    { id: "sandwich", label: "Sandwich", count: sandwichCount },
+  ];
+  return (
+    <div className="flex gap-1 p-0.5 bg-[var(--color-surface)] rounded-[5px]">
+      {tabs.map((t) => (
+        <button
+          key={t.id}
+          onClick={() => onChange(t.id)}
+          className={`px-3 py-1.5 text-[12px] font-medium rounded-[4px] transition-colors cursor-pointer ${
+            active === t.id
+              ? "bg-[var(--color-accent)] text-[var(--color-bg)]"
+              : "text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]"
+          }`}
+        >
+          {t.label}
+          <span className="ml-1 opacity-70 tabular-nums">({t.count})</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function formatTokenAmount(raw?: string, formatted?: string): string {
+  if (formatted) return formatted;
+  if (!raw) return "?";
+  const n = Number(raw);
+  if (!isNaN(n) && isFinite(n)) {
+    if (Math.abs(n) < 0.0001) return n.toExponential(2);
+    if (Math.abs(n) >= 1e6) return n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+    if (Math.abs(n) >= 1) return n.toLocaleString("en-US", { maximumFractionDigits: 4 });
+    return n.toFixed(6);
+  }
+  return raw.length > 12 ? `${raw.slice(0, 10)}...` : raw;
+}
+
+function SandwichFlowStep({
+  role,
+  label,
+  address,
+  tokenInSymbol,
+  amountIn,
+  amountInFormatted,
+  tokenOutSymbol,
+  amountOut,
+  amountOutFormatted,
+  txHash,
+  chain,
+}: {
+  role: "bot-entry" | "bot-exit" | "victim";
+  label: string;
+  address: string;
+  tokenInSymbol?: string;
+  amountIn?: string;
+  amountInFormatted?: string;
+  tokenOutSymbol?: string;
+  amountOut?: string;
+  amountOutFormatted?: string;
+  txHash: string;
+  chain: ChainConfig;
+}) {
+  const borderColor =
+    role === "victim"
+      ? "var(--color-negative)"
+      : "var(--color-positive)";
+  const bgColor =
+    role === "victim"
+      ? "rgba(220,60,60,0.06)"
+      : "rgba(60,180,100,0.06)";
+  const roleIcon = role === "victim" ? "VICTIM" : "BOT";
+
+  return (
+    <div
+      className="px-3 py-2.5 rounded-[4px]"
+      style={{ borderLeft: `3px solid ${borderColor}`, background: bgColor }}
+    >
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <div className="flex items-center gap-2">
+          <span
+            className="text-[9px] font-bold tracking-wider px-1.5 py-0.5 rounded-[3px]"
+            style={{
+              background: role === "victim" ? "rgba(220,60,60,0.15)" : "rgba(60,180,100,0.15)",
+              color: borderColor,
+            }}
+          >
+            {roleIcon}
+          </span>
+          <span className="text-[11px] text-[var(--color-text-secondary)]">
+            {label}
+          </span>
+        </div>
+        <a
+          href={`${chain.explorerTxUrl}${txHash}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-accent)] transition-colors"
+        >
+          {truncHash(txHash)} ↗
+        </a>
+      </div>
+      <div className="flex items-center gap-1 text-[12px]">
+        <span className="font-[family-name:var(--font-mono)] text-[var(--color-text-dim)]">
+          {truncAddr(address, 6, 4)}
+        </span>
+        <span className="text-[var(--color-text-dim)] mx-1">:</span>
+        <span className="font-[family-name:var(--font-mono)] tabular-nums text-[var(--color-text)]">
+          {formatTokenAmount(amountIn, amountInFormatted)}
+        </span>
+        <span className="text-[var(--color-text-secondary)] text-[11px]">
+          {tokenInSymbol || "???"}
+        </span>
+        <span className="text-[var(--color-text-dim)] mx-0.5">→</span>
+        <span className="font-[family-name:var(--font-mono)] tabular-nums text-[var(--color-text)]">
+          {formatTokenAmount(amountOut, amountOutFormatted)}
+        </span>
+        <span className="text-[var(--color-text-secondary)] text-[11px]">
+          {tokenOutSymbol || "???"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function SandwichCard({
+  sw,
+  chain,
+  isExpanded,
+  onToggle,
+}: {
+  sw: Sandwich;
+  chain: ChainConfig;
+  isExpanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="border border-[var(--color-border)] rounded-[6px] mb-3 overflow-hidden">
+      <div
+        className="px-3 sm:px-4 py-3 cursor-pointer hover:bg-[var(--color-surface)] transition-colors"
+        onClick={onToggle}
+      >
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[10px] font-bold tracking-wider px-1.5 py-0.5 rounded-[3px] bg-[rgba(220,60,60,0.12)] text-[var(--color-negative)] shrink-0">
+              SANDWICH
+            </span>
+            <span className="font-[family-name:var(--font-mono)] text-[12px] text-[var(--color-text-secondary)] tabular-nums">
+              #{sw.block_number}
+            </span>
+            <DexBadge name={sw.dex} />
+          </div>
+          <div className="text-right shrink-0">
+            <span
+              className="font-[family-name:var(--font-mono)] text-[14px] font-semibold tabular-nums"
+              style={{ color: sw.bot_profit_usd != null ? "var(--color-positive)" : "var(--color-text-dim)" }}
+            >
+              {sw.bot_profit_usd != null ? formatUsd(sw.bot_profit_usd) : "N/A"}
+            </span>
+            {sw.bot_profit_token && sw.bot_profit_amount && (
+              <div className="text-[10px] text-[var(--color-text-dim)] mt-0.5 font-[family-name:var(--font-mono)] tabular-nums">
+                +{formatTokenAmount(sw.bot_profit_amount)} {sw.bot_profit_token}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+          <span className="text-[var(--color-text-dim)]">
+            Bot: <span className="font-[family-name:var(--font-mono)]">{truncAddr(sw.bot_address, 6, 4)}</span>
+          </span>
+          <span className="text-[var(--color-negative)]">
+            {sw.victims.length} victim{sw.victims.length !== 1 ? "s" : ""}
+          </span>
+          <span className="text-[var(--color-text-dim)]">
+            {isExpanded ? "▾" : "▸"} details
+          </span>
+        </div>
+      </div>
+
+      {isExpanded && (
+        <div className="px-3 sm:px-4 pb-4 pt-1 bg-[var(--color-surface)]">
+          <div className="flex flex-col gap-1.5">
+            <SandwichFlowStep
+              role="bot-entry"
+              label="Entry"
+              address={sw.bot_address}
+              tokenInSymbol={sw.entry_tx.token_in_symbol}
+              amountIn={sw.entry_tx.amount_in}
+              amountInFormatted={sw.entry_tx.amount_in_formatted}
+              tokenOutSymbol={sw.entry_tx.token_out_symbol}
+              amountOut={sw.entry_tx.amount_out}
+              amountOutFormatted={sw.entry_tx.amount_out_formatted}
+              txHash={sw.entry_tx.tx_hash}
+              chain={chain}
+            />
+
+            {sw.victims.map((v, i) => (
+              <SandwichFlowStep
+                key={v.tx_hash}
+                role="victim"
+                label={sw.victims.length > 1 ? `Victim ${i + 1}` : "Victim"}
+                address={v.from_address}
+                tokenInSymbol={v.token_in_symbol}
+                amountIn={v.amount_in}
+                amountInFormatted={v.amount_in_formatted}
+                tokenOutSymbol={v.token_out_symbol}
+                amountOut={v.amount_out}
+                amountOutFormatted={v.amount_out_formatted}
+                txHash={v.tx_hash}
+                chain={chain}
+              />
+            ))}
+
+            <SandwichFlowStep
+              role="bot-exit"
+              label="Exit"
+              address={sw.bot_address}
+              tokenInSymbol={sw.exit_tx.token_in_symbol}
+              amountIn={sw.exit_tx.amount_in}
+              amountInFormatted={sw.exit_tx.amount_in_formatted}
+              tokenOutSymbol={sw.exit_tx.token_out_symbol}
+              amountOut={sw.exit_tx.amount_out}
+              amountOutFormatted={sw.exit_tx.amount_out_formatted}
+              txHash={sw.exit_tx.tx_hash}
+              chain={chain}
+            />
+          </div>
+
+          {sw.bot_profit_usd != null && (
+            <div className="mt-3 pt-2.5 border-t border-[var(--color-border)] flex items-center justify-between">
+              <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-wide">
+                Bot Profit
+              </span>
+              <div className="text-right">
+                <span
+                  className="font-[family-name:var(--font-mono)] text-[14px] font-semibold tabular-nums"
+                  style={{ color: "var(--color-positive)" }}
+                >
+                  {formatUsd(sw.bot_profit_usd)}
+                </span>
+                {sw.bot_profit_token && sw.bot_profit_amount && (
+                  <span className="ml-2 text-[11px] text-[var(--color-text-secondary)] font-[family-name:var(--font-mono)] tabular-nums">
+                    ({formatTokenAmount(sw.bot_profit_amount)} {sw.bot_profit_token})
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -588,6 +886,7 @@ function pageNumbers(current: number, total: number): (number | "...")[] {
 
 export default function Page() {
   const [chain, setChain] = useState<ChainId>("eth");
+  const [mevType, setMevType] = useState<MevType>("arbitrage");
   const [data, setData] = useState<Data | null>(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -618,6 +917,7 @@ export default function Page() {
     setExpanded(null);
     setSearch("");
     setPage(1);
+    setMevType("arbitrage");
     load();
   }, [chain, load]);
 
@@ -661,12 +961,21 @@ export default function Page() {
       data.relay_blocks.length
     : 0;
 
+  const sandwiches = data.sandwiches ?? [];
+
   const pnlTxs = data.transactions.filter((t) => t.pnl_usd !== null);
   const totalPnl = pnlTxs.reduce((s, t) => s + (t.pnl_usd ?? 0), 0);
   const profitableTxs = pnlTxs.filter((t) => (t.pnl_usd ?? 0) > 0);
 
+  const totalSandwichProfit = sandwiches.reduce(
+    (s, sw) => s + (sw.bot_profit_usd ?? 0),
+    0
+  );
+  const totalVictims = sandwiches.reduce((s, sw) => s + sw.victims.length, 0);
+
   const q = search.trim().toLowerCase();
-  const filtered = q
+
+  const filteredArb = q
     ? data.transactions.filter(
         (tx) =>
           tx.tx_hash.toLowerCase().includes(q) ||
@@ -678,9 +987,36 @@ export default function Page() {
       )
     : data.transactions;
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const filteredSandwich = q
+    ? sandwiches.filter(
+        (sw) =>
+          sw.bot_address.toLowerCase().includes(q) ||
+          sw.entry_tx.tx_hash.toLowerCase().includes(q) ||
+          sw.exit_tx.tx_hash.toLowerCase().includes(q) ||
+          sw.block_number.toString().includes(q) ||
+          sw.dex.toLowerCase().includes(q) ||
+          sw.victims.some(
+            (v) =>
+              v.from_address.toLowerCase().includes(q) ||
+              v.tx_hash.toLowerCase().includes(q)
+          )
+      )
+    : sandwiches;
+
+  const filtered = mevType === "arbitrage" ? filteredArb : [];
+  const totalPages = Math.max(
+    1,
+    Math.ceil(
+      (mevType === "arbitrage" ? filteredArb.length : filteredSandwich.length) /
+        PAGE_SIZE
+    )
+  );
   const safePage = Math.min(page, totalPages);
   const paged = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const pagedSandwiches = filteredSandwich.slice(
+    (safePage - 1) * PAGE_SIZE,
+    safePage * PAGE_SIZE
+  );
 
   const blockLabel = chain === "sol" ? "slots" : "blocks";
 
@@ -694,7 +1030,7 @@ export default function Page() {
               MEV Scanner
             </h1>
             <p className="text-[11px] text-[var(--color-text-dim)] mt-1.5 tracking-wide">
-              Arbitrage transactions on {chainConfig.label}
+              MEV transactions on {chainConfig.label}
             </p>
           </div>
           <ChainTabs active={chain} onChange={setChain} />
@@ -729,14 +1065,14 @@ export default function Page() {
       </header>
 
       {/* Stats */}
-      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 sm:gap-6 mb-8 sm:mb-10 pb-6 sm:pb-8 border-b border-[var(--color-border)]">
+      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 sm:gap-6 mb-8 sm:mb-10 pb-6 sm:pb-8 border-b border-[var(--color-border)]">
         <Stat
           label="Arbitrage Txs"
           value={data.total_arbitrage_txs}
           sub={`from ${data.scan_blocks} ${blockLabel}`}
         />
         <Stat
-          label="Total PnL"
+          label="Arb PnL"
           value={formatUsd(totalPnl)}
           sub={`${pnlTxs.length} txs with data`}
           color={totalPnl >= 0 ? "var(--color-positive)" : "var(--color-negative)"}
@@ -744,59 +1080,56 @@ export default function Page() {
         <Stat
           label="Profitable"
           value={`${profitableTxs.length} / ${pnlTxs.length}`}
-          sub="with PnL data"
+          sub="arb txs"
+        />
+        <Stat
+          label="Sandwiches"
+          value={sandwiches.length}
+          sub={`${totalVictims} victim${totalVictims !== 1 ? "s" : ""}`}
+        />
+        <Stat
+          label="Sandwich Profit"
+          value={sandwiches.length > 0 ? formatUsd(totalSandwichProfit) : "—"}
+          sub="total bot profit"
+          color={totalSandwichProfit > 0 ? "var(--color-positive)" : undefined}
         />
         {hasRelay ? (
-          <>
-            <Stat
-              label="Peak MEV"
-              value={`${maxMev.toFixed(4)} Ξ`}
-              sub="per block (relay)"
-            />
-            <Stat
-              label="Avg MEV / Block"
-              value={`${avgMev.toFixed(4)} Ξ`}
-              sub={`${data.relay_blocks.length} blocks`}
-            />
-          </>
+          <Stat
+            label="Peak MEV"
+            value={`${maxMev.toFixed(4)} Ξ`}
+            sub="per block (relay)"
+          />
         ) : (
-          <>
-            <Stat
-              label="Avg Swaps / Tx"
-              value={
-                pnlTxs.length > 0
-                  ? (
-                      data.transactions.reduce(
-                        (s, t) => s + (t.swap_count ?? 0),
-                        0
-                      ) / data.transactions.length
-                    ).toFixed(1)
-                  : "—"
-              }
-              sub="per arbitrage tx"
-            />
-            <Stat
-              label="DEXes"
-              value={
-                new Set(data.transactions.flatMap((t) => t.dex_list)).size
-              }
-              sub="unique protocols"
-            />
-          </>
+          <Stat
+            label="DEXes"
+            value={
+              new Set(data.transactions.flatMap((t) => t.dex_list)).size
+            }
+            sub="unique protocols"
+          />
         )}
       </section>
 
       {/* Transactions */}
       <section>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3 sm:mb-4">
-          <h2 className="text-[12px] font-medium uppercase tracking-[0.06em] text-[var(--color-text-secondary)]">
-            Arbitrage Transactions
+          <div className="flex items-center gap-3">
+            <TypeTabs
+              active={mevType}
+              onChange={(t) => {
+                setMevType(t);
+                setPage(1);
+                setExpanded(null);
+              }}
+              arbCount={data.total_arbitrage_txs}
+              sandwichCount={sandwiches.length}
+            />
             {q && (
-              <span className="normal-case tracking-normal ml-2 text-[var(--color-text-dim)]">
-                — {filtered.length} result{filtered.length !== 1 ? "s" : ""}
+              <span className="text-[11px] text-[var(--color-text-dim)]">
+                — {mevType === "arbitrage" ? filteredArb.length : filteredSandwich.length} result{(mevType === "arbitrage" ? filteredArb.length : filteredSandwich.length) !== 1 ? "s" : ""}
               </span>
             )}
-          </h2>
+          </div>
           <div className="relative w-full sm:w-64">
             <input
               type="text"
@@ -822,27 +1155,44 @@ export default function Page() {
           </div>
         </div>
 
-        {/* Desktop: Table */}
-        <div className="hidden md:block overflow-x-auto">
-          <table className="w-full min-w-[860px] border-collapse">
-            <thead>
-              <tr className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-dim)] border-b border-[var(--color-border)]">
-                <th className="text-left font-normal py-2 pr-4 w-[180px]">Tx Hash</th>
-                <th className="text-left font-normal py-2 pr-4 w-[90px]">
-                  {chain === "sol" ? "Slot" : "Block"}
-                </th>
-                <th className="text-left font-normal py-2 pr-4 w-[100px]">Swaps</th>
-                <th className="text-left font-normal py-2 pr-4 w-[140px]">DEXes</th>
-                <th className="text-right font-normal py-2 pr-4 w-[90px]">
-                  {chain === "sol" ? "Fee" : "Gas"}
-                </th>
-                <th className="text-right font-normal py-2 pr-4 w-[100px]">PnL</th>
-                <th className="text-right font-normal py-2 w-[130px]">Links</th>
-              </tr>
-            </thead>
-            <tbody>
+        {mevType === "arbitrage" && (
+          <>
+            {/* Desktop: Table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full min-w-[860px] border-collapse">
+                <thead>
+                  <tr className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-dim)] border-b border-[var(--color-border)]">
+                    <th className="text-left font-normal py-2 pr-4 w-[180px]">Tx Hash</th>
+                    <th className="text-left font-normal py-2 pr-4 w-[90px]">
+                      {chain === "sol" ? "Slot" : "Block"}
+                    </th>
+                    <th className="text-left font-normal py-2 pr-4 w-[100px]">Swaps</th>
+                    <th className="text-left font-normal py-2 pr-4 w-[140px]">DEXes</th>
+                    <th className="text-right font-normal py-2 pr-4 w-[90px]">
+                      {chain === "sol" ? "Fee" : "Gas"}
+                    </th>
+                    <th className="text-right font-normal py-2 pr-4 w-[100px]">PnL</th>
+                    <th className="text-right font-normal py-2 w-[130px]">Links</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paged.map((tx) => (
+                    <TxRow
+                      key={tx.tx_hash}
+                      tx={tx}
+                      chain={chainConfig}
+                      isExpanded={expanded === tx.tx_hash}
+                      onToggle={() => toggle(tx.tx_hash)}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile: Cards */}
+            <div className="md:hidden">
               {paged.map((tx) => (
-                <TxRow
+                <TxCard
                   key={tx.tx_hash}
                   tx={tx}
                   chain={chainConfig}
@@ -850,27 +1200,35 @@ export default function Page() {
                   onToggle={() => toggle(tx.tx_hash)}
                 />
               ))}
-            </tbody>
-          </table>
-        </div>
+            </div>
 
-        {/* Mobile: Cards */}
-        <div className="md:hidden">
-          {paged.map((tx) => (
-            <TxCard
-              key={tx.tx_hash}
-              tx={tx}
-              chain={chainConfig}
-              isExpanded={expanded === tx.tx_hash}
-              onToggle={() => toggle(tx.tx_hash)}
-            />
-          ))}
-        </div>
+            {filteredArb.length === 0 && (
+              <div className="text-center py-16 text-[var(--color-text-dim)] text-sm">
+                {q ? `No results for "${q}"` : "No arbitrage transactions found. Crawler may still be syncing."}
+              </div>
+            )}
+          </>
+        )}
 
-        {filtered.length === 0 && (
-          <div className="text-center py-16 text-[var(--color-text-dim)] text-sm">
-            {q ? `No results for "${q}"` : "No arbitrage transactions found. Crawler may still be syncing."}
-          </div>
+        {mevType === "sandwich" && (
+          <>
+            <div className="space-y-0">
+              {pagedSandwiches.map((sw, i) => (
+                <SandwichCard
+                  key={sw.entry_tx.tx_hash + "-" + i}
+                  sw={sw}
+                  chain={chainConfig}
+                  isExpanded={expanded === sw.entry_tx.tx_hash}
+                  onToggle={() => toggle(sw.entry_tx.tx_hash)}
+                />
+              ))}
+            </div>
+            {filteredSandwich.length === 0 && (
+              <div className="text-center py-16 text-[var(--color-text-dim)] text-sm">
+                {q ? `No results for "${q}"` : "No sandwich attacks found. Crawler may still be syncing."}
+              </div>
+            )}
+          </>
         )}
 
         {/* Pagination */}
@@ -954,10 +1312,10 @@ export default function Page() {
       {/* Footer */}
       <footer className="mt-12 sm:mt-16 pb-6 sm:pb-8 text-[10px] text-[var(--color-text-dim)] border-t border-[var(--color-border)] pt-4">
         {chain === "eth"
-          ? "Data from Flashbots Relay API & on-chain Swap event scanning. Arbitrage = ≥2 Uniswap swaps in a single transaction."
+          ? "Data from Flashbots Relay API & on-chain Swap event scanning. Arbitrage = ≥2 Uniswap swaps in one tx. Sandwich = same bot front-runs & back-runs victim swaps on the same pool."
           : chain === "bsc"
-            ? "On-chain Swap event scanning on BSC. Arbitrage = ≥2 PancakeSwap swaps in a single transaction."
-            : "On-chain DEX instruction scanning on Solana. Arbitrage = ≥2 DEX swaps in a single transaction."}
+            ? "On-chain Swap event scanning on BSC. Arbitrage = ≥2 PancakeSwap swaps in one tx. Sandwich = same bot front-runs & back-runs victim swaps."
+            : "On-chain DEX instruction scanning on Solana. Arbitrage = ≥2 DEX swaps in one tx. Sandwich = same signer brackets victim swaps in the same block."}
       </footer>
     </div>
   );

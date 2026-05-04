@@ -221,9 +221,229 @@ function analyzeBlock(block, slotNumber) {
   return arbTxs;
 }
 
+function extractFlowDirection(flows) {
+  let tokenIn = { mint: "", amount: "0", absVal: 0n };
+  let tokenOut = { mint: "", amount: "0", absVal: 0n };
+  for (const [mint, info] of Object.entries(flows)) {
+    const amt = BigInt(info.amount);
+    const abs = amt < 0n ? -amt : amt;
+    if (amt < 0n && abs > tokenIn.absVal) {
+      tokenIn = { mint, amount: abs.toString(), absVal: abs };
+    } else if (amt > 0n && abs > tokenOut.absVal) {
+      tokenOut = { mint, amount: abs.toString(), absVal: abs };
+    }
+  }
+  return {
+    token_in: tokenIn.mint,
+    amount_in: tokenIn.amount,
+    token_out: tokenOut.mint,
+    amount_out: tokenOut.amount,
+  };
+}
+
+function detectSandwiches(block, slotNumber) {
+  const txs = block.transactions ?? [];
+
+  const swapTxs = [];
+  for (let txIndex = 0; txIndex < txs.length; txIndex++) {
+    const tx = txs[txIndex];
+    if (tx.meta?.err) continue;
+
+    const dexHits = countDexSwaps(tx);
+    if (dexHits.size === 0) continue;
+
+    const allKeys = resolveAccountKeys(tx);
+    const signer = allKeys[0] ?? "";
+    if (!signer) continue;
+
+    const signature = tx.transaction?.signatures?.[0];
+    if (!signature) continue;
+
+    const { flows } = computeTokenBalanceDiffs(tx);
+
+    swapTxs.push({
+      txIndex,
+      signature,
+      signer,
+      dexList: [...dexHits.keys()],
+      flows,
+    });
+  }
+
+  const bySigner = new Map();
+  for (const stx of swapTxs) {
+    if (!bySigner.has(stx.signer)) bySigner.set(stx.signer, []);
+    bySigner.get(stx.signer).push(stx);
+  }
+
+  const sandwiches = [];
+
+  for (const [signer, signerTxs] of bySigner) {
+    if (signerTxs.length < 2) continue;
+    signerTxs.sort((a, b) => a.txIndex - b.txIndex);
+
+    for (let i = 0; i < signerTxs.length; i++) {
+      for (let j = i + 1; j < signerTxs.length; j++) {
+        const entry = signerTxs[i];
+        const exit = signerTxs[j];
+
+        const sharedTokens = new Set();
+        for (const mint of Object.keys(entry.flows)) {
+          if (!(mint in exit.flows)) continue;
+          const entryAmt = BigInt(entry.flows[mint].amount);
+          const exitAmt = BigInt(exit.flows[mint].amount);
+          if ((entryAmt > 0n && exitAmt < 0n) || (entryAmt < 0n && exitAmt > 0n)) {
+            sharedTokens.add(mint);
+          }
+        }
+        if (sharedTokens.size === 0) continue;
+
+        const victims = [];
+        for (const stx of swapTxs) {
+          if (stx.signer === signer) continue;
+          if (stx.txIndex <= entry.txIndex || stx.txIndex >= exit.txIndex) continue;
+
+          let sharesToken = false;
+          for (const mint of sharedTokens) {
+            if (mint in stx.flows) { sharesToken = true; break; }
+          }
+          if (!sharesToken) continue;
+
+          const vDir = extractFlowDirection(stx.flows);
+          victims.push({
+            tx_hash: stx.signature,
+            from_address: stx.signer,
+            token_in: vDir.token_in,
+            amount_in: vDir.amount_in,
+            token_out: vDir.token_out,
+            amount_out: vDir.amount_out,
+          });
+        }
+
+        if (victims.length === 0) continue;
+
+        const entryDir = extractFlowDirection(entry.flows);
+        const exitDir = extractFlowDirection(exit.flows);
+        const allDexes = [...new Set([...entry.dexList, ...exit.dexList])];
+
+        sandwiches.push({
+          type: "sandwich",
+          block_number: slotNumber,
+          bot_address: signer,
+          pool: "",
+          dex: allDexes.join(", "),
+          entry_tx: {
+            tx_hash: entry.signature,
+            token_in: entryDir.token_in,
+            amount_in: entryDir.amount_in,
+            token_out: entryDir.token_out,
+            amount_out: entryDir.amount_out,
+          },
+          exit_tx: {
+            tx_hash: exit.signature,
+            token_in: exitDir.token_in,
+            amount_in: exitDir.amount_in,
+            token_out: exitDir.token_out,
+            amount_out: exitDir.amount_out,
+          },
+          victims,
+          bot_profit_usd: null,
+          explorer_base: "https://solscan.io",
+        });
+      }
+    }
+  }
+
+  return sandwiches;
+}
+
+function enrichSandwiches(sandwiches, prices) {
+  const solPrice = prices[WSOL]?.price ?? 0;
+
+  for (const sw of sandwiches) {
+    for (const field of [sw.entry_tx, sw.exit_tx]) {
+      if (field.token_in && prices[field.token_in]) {
+        const info = prices[field.token_in];
+        field.token_in_symbol = info.symbol;
+        field.amount_in_formatted = (Number(field.amount_in) / 10 ** (info.decimals ?? 9)).toFixed(6);
+      }
+      if (field.token_out && prices[field.token_out]) {
+        const info = prices[field.token_out];
+        field.token_out_symbol = info.symbol;
+        field.amount_out_formatted = (Number(field.amount_out) / 10 ** (info.decimals ?? 9)).toFixed(6);
+      }
+    }
+    for (const v of sw.victims) {
+      if (v.token_in && prices[v.token_in]) {
+        const info = prices[v.token_in];
+        v.token_in_symbol = info.symbol;
+        v.amount_in_formatted = (Number(v.amount_in) / 10 ** (info.decimals ?? 9)).toFixed(6);
+      }
+      if (v.token_out && prices[v.token_out]) {
+        const info = prices[v.token_out];
+        v.token_out_symbol = info.symbol;
+        v.amount_out_formatted = (Number(v.amount_out) / 10 ** (info.decimals ?? 9)).toFixed(6);
+      }
+    }
+
+    const entryTx = sw.entry_tx;
+    const exitTx = sw.exit_tx;
+
+    if (entryTx.token_in === WSOL && exitTx.token_out === WSOL) {
+      const solSpent = Number(entryTx.amount_in) / 1e9;
+      const solReceived = Number(exitTx.amount_out) / 1e9;
+      const profitSol = solReceived - solSpent;
+      sw.bot_profit_amount = Math.abs(profitSol).toFixed(6);
+      sw.bot_profit_token = "SOL";
+      if (solPrice > 0) {
+        sw.bot_profit_usd = Math.round(profitSol * solPrice * 100) / 100;
+      }
+    } else {
+      const netFlows = {};
+      if (entryTx.token_in)
+        netFlows[entryTx.token_in] = -Number(entryTx.amount_in);
+      if (entryTx.token_out)
+        netFlows[entryTx.token_out] =
+          (netFlows[entryTx.token_out] ?? 0) + Number(entryTx.amount_out);
+      if (exitTx.token_in)
+        netFlows[exitTx.token_in] =
+          (netFlows[exitTx.token_in] ?? 0) - Number(exitTx.amount_in);
+      if (exitTx.token_out)
+        netFlows[exitTx.token_out] =
+          (netFlows[exitTx.token_out] ?? 0) + Number(exitTx.amount_out);
+
+      let profitUsd = 0;
+      let hasPriceData = false;
+      let maxAbsFlow = 0;
+      let bestMint = "";
+      for (const [mint, rawAmount] of Object.entries(netFlows)) {
+        const info = prices[mint];
+        if (!info?.price) continue;
+        hasPriceData = true;
+        const usd = (rawAmount / 10 ** (info.decimals ?? 9)) * info.price;
+        profitUsd += usd;
+        if (Math.abs(usd) > maxAbsFlow) {
+          maxAbsFlow = Math.abs(usd);
+          bestMint = mint;
+        }
+      }
+      if (hasPriceData) {
+        sw.bot_profit_usd = Math.round(profitUsd * 100) / 100;
+        if (bestMint && prices[bestMint]) {
+          const info = prices[bestMint];
+          const amt = (netFlows[bestMint] ?? 0) / 10 ** (info.decimals ?? 9);
+          sw.bot_profit_amount = Math.abs(amt).toFixed(6);
+          sw.bot_profit_token = info.symbol;
+        }
+      }
+    }
+  }
+}
+
 async function scanSlots(conn, numSlots = SCAN_SLOTS) {
   const latestSlot = await conn.getSlot("confirmed");
   const allArb = [];
+  const allSandwiches = [];
 
   for (let i = 0; i < numSlots; i++) {
     const slot = latestSlot - i;
@@ -240,14 +460,16 @@ async function scanSlots(conn, numSlots = SCAN_SLOTS) {
         continue;
       }
       const arbs = analyzeBlock(block, slot);
-      log(`    ${block.transactions?.length ?? 0} 笔交易, ${arbs.length} 笔套利`);
+      const sandwiches = detectSandwiches(block, slot);
+      log(`    ${block.transactions?.length ?? 0} 笔交易, ${arbs.length} 笔套利, ${sandwiches.length} 笔夹子`);
       allArb.push(...arbs);
+      allSandwiches.push(...sandwiches);
     } catch (e) {
       log(`    [!] 失败: ${e.message?.slice(0, 80)}`);
     }
   }
 
-  return allArb;
+  return { arbs: allArb, sandwiches: allSandwiches };
 }
 
 // ---------- 价格查询 & PnL 计算 ----------
@@ -363,8 +585,8 @@ async function main() {
 
   if (!isWatch) {
     log("\n[1/2] 扫描最近 slot...");
-    let arbTxs = await scanSlots(conn, SCAN_SLOTS);
-    log(`  ✓ ${arbTxs.length} 笔套利交易`);
+    const { arbs: arbTxs, sandwiches: allSandwiches } = await scanSlots(conn, SCAN_SLOTS);
+    log(`  ✓ ${arbTxs.length} 笔套利交易, ${allSandwiches.length} 笔夹子攻击`);
     arbTxs.sort((a, b) => b.swap_count - a.swap_count);
 
     log("\n[2/2] 查询价格 & 计算 PnL...");
@@ -372,8 +594,19 @@ async function main() {
     for (const tx of arbTxs) {
       for (const token of Object.keys(tx.net_token_flows ?? {})) allTokens.add(token);
     }
+    for (const sw of allSandwiches) {
+      for (const field of [sw.entry_tx, sw.exit_tx]) {
+        if (field.token_in) allTokens.add(field.token_in);
+        if (field.token_out) allTokens.add(field.token_out);
+      }
+      for (const v of sw.victims) {
+        if (v.token_in) allTokens.add(v.token_in);
+        if (v.token_out) allTokens.add(v.token_out);
+      }
+    }
     const prices = await fetchTokenPrices([...allTokens]);
     computePnl(arbTxs, prices);
+    enrichSandwiches(allSandwiches, prices);
 
     const pnlTxs = arbTxs.filter((t) => t.pnl_usd !== null);
     const totalPnl = pnlTxs.reduce((s, t) => s + t.pnl_usd, 0);
@@ -386,6 +619,7 @@ async function main() {
       total_arbitrage_txs: arbTxs.length,
       relay_blocks: [],
       transactions: arbTxs,
+      sandwiches: allSandwiches,
     });
 
     log(`\n  已保存 → ${OUTPUT_FILE} & OSS`);
@@ -395,7 +629,9 @@ async function main() {
   // ---- Watch 模式 ----
   let lastSlot = 0;
   let allTxs = [];
+  let allSandwiches = [];
   const MAX_TXS = 200;
+  const MAX_SANDWICHES = 100;
 
   async function tick() {
     try {
@@ -410,6 +646,7 @@ async function main() {
       log(`\n[${ts}] slot ${currentSlot} (扫描 ${slotsToScan} 个)...`);
 
       const newArbs = [];
+      const newSandwiches = [];
       for (let i = 0; i < slotsToScan; i++) {
         const s = currentSlot - i;
         try {
@@ -420,10 +657,12 @@ async function main() {
           });
           if (!block) continue;
           const arbs = analyzeBlock(block, s);
-          if (arbs.length > 0) {
-            log(`  slot ${s}: ${arbs.length} 笔套利`);
+          const sandwiches = detectSandwiches(block, s);
+          if (arbs.length > 0 || sandwiches.length > 0) {
+            log(`  slot ${s}: ${arbs.length} 笔套利, ${sandwiches.length} 笔夹子`);
           }
           newArbs.push(...arbs);
+          newSandwiches.push(...sandwiches);
         } catch (e) {
           if (!e.message?.includes("was skipped")) {
             log(`  [!] slot ${s}: ${e.message?.slice(0, 60)}`);
@@ -431,13 +670,24 @@ async function main() {
         }
       }
 
-      if (newArbs.length > 0) {
+      if (newArbs.length > 0 || newSandwiches.length > 0) {
         const allTokens = new Set([WSOL]);
         for (const tx of newArbs) {
           for (const token of Object.keys(tx.net_token_flows ?? {})) allTokens.add(token);
         }
+        for (const sw of newSandwiches) {
+          for (const field of [sw.entry_tx, sw.exit_tx]) {
+            if (field.token_in) allTokens.add(field.token_in);
+            if (field.token_out) allTokens.add(field.token_out);
+          }
+          for (const v of sw.victims) {
+            if (v.token_in) allTokens.add(v.token_in);
+            if (v.token_out) allTokens.add(v.token_out);
+          }
+        }
         const prices = await fetchTokenPrices([...allTokens]);
         computePnl(newArbs, prices);
+        enrichSandwiches(newSandwiches, prices);
       }
 
       const seen = new Set();
@@ -450,6 +700,16 @@ async function main() {
       }
       allTxs = merged;
 
+      const seenSw = new Set();
+      const mergedSw = [];
+      for (const sw of [...newSandwiches, ...allSandwiches]) {
+        if (seenSw.has(sw.entry_tx.tx_hash)) continue;
+        seenSw.add(sw.entry_tx.tx_hash);
+        mergedSw.push(sw);
+        if (mergedSw.length >= MAX_SANDWICHES) break;
+      }
+      allSandwiches = mergedSw;
+
       await saveOutput({
         updated_at: new Date().toISOString(),
         chain: "solana",
@@ -457,10 +717,11 @@ async function main() {
         total_arbitrage_txs: allTxs.length,
         relay_blocks: [],
         transactions: allTxs,
+        sandwiches: allSandwiches,
       });
 
       const newCount = newArbs.length;
-      log(`  ✓ +${newCount} 新交易, 累计 ${allTxs.length} 笔`);
+      log(`  ✓ +${newCount} 新套利, +${newSandwiches.length} 新夹子, 累计 ${allTxs.length} 笔套利 / ${allSandwiches.length} 笔夹子`);
       lastSlot = currentSlot;
     } catch (e) {
       log(`  [!] tick 错误: ${e.message?.slice(0, 80)}`);

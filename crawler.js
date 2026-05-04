@@ -226,9 +226,182 @@ function analyzeReceipts(receipts, blockNumber) {
   return arbTxs;
 }
 
+function detectSandwiches(receipts, blockNumber) {
+  const swapRecords = [];
+
+  for (const receipt of receipts) {
+    const txHash = receipt.transactionHash;
+    const txIndex = parseInt(receipt.transactionIndex, 16);
+    const from = (receipt.from ?? "").toLowerCase();
+    const logs = receipt.logs ?? [];
+
+    const swapLogs = logs.filter(
+      (l) => l.topics?.[0] === V2_SWAP || l.topics?.[0] === V3_SWAP
+    );
+    if (swapLogs.length === 0) continue;
+
+    const transferLogs = logs.filter(
+      (l) =>
+        l.topics?.[0] === ERC20_TRANSFER &&
+        l.topics?.length === 3 &&
+        l.data
+    );
+
+    for (const swapLog of swapLogs) {
+      const pool = swapLog.address.toLowerCase();
+      const dex = swapLog.topics[0] === V2_SWAP ? "Uniswap V2" : "Uniswap V3";
+
+      let tokenIn = null, amountIn = null, tokenOut = null, amountOut = null;
+
+      for (const tLog of transferLogs) {
+        const tFrom = topicToAddr(tLog.topics[1]);
+        const tTo = topicToAddr(tLog.topics[2]);
+        const amount = BigInt(tLog.data).toString();
+        const token = tLog.address.toLowerCase();
+
+        if (tTo === pool) {
+          tokenIn = token;
+          amountIn = amount;
+        } else if (tFrom === pool) {
+          tokenOut = token;
+          amountOut = amount;
+        }
+      }
+
+      if (!tokenIn || !tokenOut) continue;
+
+      const direction = pool + tokenIn;
+      swapRecords.push({ txIndex, txHash, from, pool, dex, tokenIn, amountIn, tokenOut, amountOut, direction });
+    }
+  }
+
+  const poolGroups = new Map();
+  for (const rec of swapRecords) {
+    if (!poolGroups.has(rec.pool)) poolGroups.set(rec.pool, []);
+    poolGroups.get(rec.pool).push(rec);
+  }
+
+  const sandwiches = [];
+
+  for (const [poolAddr, swaps] of poolGroups) {
+    swaps.sort((a, b) => a.txIndex - b.txIndex);
+
+    const used = new Set();
+    for (let i = 0; i < swaps.length; i++) {
+      if (used.has(i)) continue;
+      const entry = swaps[i];
+
+      for (let j = i + 1; j < swaps.length; j++) {
+        if (used.has(j)) continue;
+        const exit = swaps[j];
+        if (exit.from !== entry.from) continue;
+
+        const oppositeDir = poolAddr + entry.tokenOut;
+        if (exit.direction !== oppositeDir) continue;
+
+        const victims = [];
+        for (let k = i + 1; k < j; k++) {
+          if (swaps[k].from !== entry.from && swaps[k].direction === entry.direction) {
+            victims.push(swaps[k]);
+          }
+        }
+
+        if (victims.length === 0) continue;
+
+        const dexName = entry.dex;
+        sandwiches.push({
+          type: "sandwich",
+          block_number: blockNumber,
+          bot_address: entry.from,
+          pool: poolAddr,
+          dex: dexName,
+          entry_tx: {
+            tx_hash: entry.txHash,
+            token_in: entry.tokenIn,
+            amount_in: entry.amountIn,
+            token_out: entry.tokenOut,
+            amount_out: entry.amountOut,
+          },
+          exit_tx: {
+            tx_hash: exit.txHash,
+            token_in: exit.tokenIn,
+            amount_in: exit.amountIn,
+            token_out: exit.tokenOut,
+            amount_out: exit.amountOut,
+          },
+          victims: victims.map((v) => ({
+            tx_hash: v.txHash,
+            from_address: v.from,
+            token_in: v.tokenIn,
+            amount_in: v.amountIn,
+            token_out: v.tokenOut,
+            amount_out: v.amountOut,
+          })),
+          bot_profit_usd: null,
+          explorer_base: "https://etherscan.io",
+        });
+
+        used.add(i);
+        used.add(j);
+        break;
+      }
+    }
+  }
+
+  return sandwiches;
+}
+
+function enrichSandwiches(sandwiches, prices) {
+  for (const sw of sandwiches) {
+    const entryIn = sw.entry_tx.token_in;
+    const entryOut = sw.entry_tx.token_out;
+    const exitIn = sw.exit_tx.token_in;
+    const exitOut = sw.exit_tx.token_out;
+
+    if (prices[entryIn]) {
+      sw.entry_tx.token_in_symbol = prices[entryIn].symbol;
+      sw.entry_tx.amount_in_formatted = (Number(BigInt(sw.entry_tx.amount_in)) / 10 ** prices[entryIn].decimals).toFixed(6);
+    }
+    if (prices[entryOut]) {
+      sw.entry_tx.token_out_symbol = prices[entryOut].symbol;
+      sw.entry_tx.amount_out_formatted = (Number(BigInt(sw.entry_tx.amount_out)) / 10 ** prices[entryOut].decimals).toFixed(6);
+    }
+    if (prices[exitIn]) {
+      sw.exit_tx.token_in_symbol = prices[exitIn].symbol;
+      sw.exit_tx.amount_in_formatted = (Number(BigInt(sw.exit_tx.amount_in)) / 10 ** prices[exitIn].decimals).toFixed(6);
+    }
+    if (prices[exitOut]) {
+      sw.exit_tx.token_out_symbol = prices[exitOut].symbol;
+      sw.exit_tx.amount_out_formatted = (Number(BigInt(sw.exit_tx.amount_out)) / 10 ** prices[exitOut].decimals).toFixed(6);
+    }
+
+    for (const v of sw.victims) {
+      if (prices[v.token_in]) {
+        v.token_in_symbol = prices[v.token_in].symbol;
+        v.amount_in_formatted = (Number(BigInt(v.amount_in)) / 10 ** prices[v.token_in].decimals).toFixed(6);
+      }
+      if (prices[v.token_out]) {
+        v.token_out_symbol = prices[v.token_out].symbol;
+        v.amount_out_formatted = (Number(BigInt(v.amount_out)) / 10 ** prices[v.token_out].decimals).toFixed(6);
+      }
+    }
+
+    const profitToken = entryIn;
+    const profitInfo = prices[profitToken];
+    if (!profitInfo) continue;
+
+    const netRaw = BigInt(sw.exit_tx.amount_out) - BigInt(sw.entry_tx.amount_in);
+    const netAmount = Number(netRaw) / 10 ** profitInfo.decimals;
+    sw.bot_profit_amount = Math.abs(netAmount).toFixed(6);
+    sw.bot_profit_token = profitInfo.symbol;
+    sw.bot_profit_usd = Math.round(netAmount * profitInfo.price * 100) / 100;
+  }
+}
+
 async function scanBlocks(provider, numBlocks = SCAN_BLOCKS) {
   const latest = await provider.getBlockNumber();
   const allArb = [];
+  const allSandwich = [];
 
   for (let i = 0; i < numBlocks; i++) {
     const bn = latest - i;
@@ -242,14 +415,16 @@ async function scanBlocks(provider, numBlocks = SCAN_BLOCKS) {
         continue;
       }
       const arbs = analyzeReceipts(receipts, bn);
-      log(`    ${receipts.length} 笔交易, ${arbs.length} 笔套利`);
+      const sws = detectSandwiches(receipts, bn);
+      log(`    ${receipts.length} 笔交易, ${arbs.length} 笔套利, ${sws.length} 笔三明治`);
       allArb.push(...arbs);
+      allSandwich.push(...sws);
     } catch (e) {
       log(`    [!] 失败: ${e.message?.slice(0, 80)}`);
     }
   }
 
-  return allArb;
+  return { arbs: allArb, sandwiches: allSandwich };
 }
 
 // ---------- 价格查询 & PnL 计算 ----------
@@ -379,7 +554,7 @@ async function saveOutput(output) {
 
 async function runOnce(provider) {
   const relayBlocks = await fetchRelayBlocks(30);
-  const arbTxs = await scanBlocks(provider, SCAN_BLOCKS);
+  const { arbs: arbTxs, sandwiches } = await scanBlocks(provider, SCAN_BLOCKS);
   arbTxs.sort((a, b) => b.swap_count - a.swap_count);
 
   const allTokens = new Set();
@@ -389,10 +564,17 @@ async function runOnce(provider) {
       allTokens.add(token);
     }
   }
+  for (const sw of sandwiches) {
+    allTokens.add(sw.entry_tx.token_in);
+    allTokens.add(sw.entry_tx.token_out);
+    allTokens.add(sw.exit_tx.token_in);
+    allTokens.add(sw.exit_tx.token_out);
+  }
   const prices = await fetchTokenPrices([...allTokens]);
   computePnl(arbTxs, prices);
+  enrichSandwiches(sandwiches, prices);
 
-  return { relayBlocks, arbTxs };
+  return { relayBlocks, arbTxs, sandwiches };
 }
 
 async function main() {
@@ -413,8 +595,8 @@ async function main() {
     log(`  ✓ ${relayBlocks.length} 个区块`);
 
     log("\n[2/3] 链上扫描最近区块...");
-    let arbTxs = await scanBlocks(provider, SCAN_BLOCKS);
-    log(`  ✓ ${arbTxs.length} 笔套利交易`);
+    const { arbs: arbTxs, sandwiches } = await scanBlocks(provider, SCAN_BLOCKS);
+    log(`  ✓ ${arbTxs.length} 笔套利交易, ${sandwiches.length} 笔三明治`);
     arbTxs.sort((a, b) => b.swap_count - a.swap_count);
 
     log("\n[3/3] 查询价格 & 计算 PnL...");
@@ -422,8 +604,15 @@ async function main() {
     for (const tx of arbTxs) {
       for (const token of Object.keys(tx.net_token_flows ?? {})) allTokens.add(token);
     }
+    for (const sw of sandwiches) {
+      allTokens.add(sw.entry_tx.token_in);
+      allTokens.add(sw.entry_tx.token_out);
+      allTokens.add(sw.exit_tx.token_in);
+      allTokens.add(sw.exit_tx.token_out);
+    }
     const prices = await fetchTokenPrices([...allTokens]);
     computePnl(arbTxs, prices);
+    enrichSandwiches(sandwiches, prices);
 
     const pnlTxs = arbTxs.filter((t) => t.pnl_usd !== null);
     const totalPnl = pnlTxs.reduce((s, t) => s + t.pnl_usd, 0);
@@ -433,8 +622,10 @@ async function main() {
       updated_at: new Date().toISOString(),
       scan_blocks: SCAN_BLOCKS,
       total_arbitrage_txs: arbTxs.length,
+      total_sandwiches: sandwiches.length,
       relay_blocks: relayBlocks.slice(0, 15),
       transactions: arbTxs,
+      sandwiches,
     });
 
     log(`\n  已保存 → ${OUTPUT_FILE} & OSS`);
@@ -444,7 +635,9 @@ async function main() {
   // ---- Watch 模式 ----
   let lastBlock = 0;
   let allTxs = [];
+  let allSandwiches = [];
   const MAX_TXS = 200;
+  const MAX_SANDWICHES = 100;
 
   async function tick() {
     try {
@@ -460,8 +653,8 @@ async function main() {
 
       const relayBlocks = await fetchRelayBlocks(15);
 
-      // Scan only the new blocks
       const newArbs = [];
+      const newSandwiches = [];
       for (let i = 0; i < blocksToScan; i++) {
         const blockNum = currentBlock - i;
         const hex = "0x" + blockNum.toString(16);
@@ -469,26 +662,35 @@ async function main() {
           const receipts = await provider.send("eth_getBlockReceipts", [hex]);
           if (!receipts) continue;
           const arbs = analyzeReceipts(receipts, blockNum);
-          if (arbs.length > 0) {
-            log(`  区块 ${blockNum}: ${arbs.length} 笔套利`);
+          const sws = detectSandwiches(receipts, blockNum);
+          if (arbs.length > 0 || sws.length > 0) {
+            log(`  区块 ${blockNum}: ${arbs.length} 笔套利, ${sws.length} 笔三明治`);
           }
           newArbs.push(...arbs);
+          newSandwiches.push(...sws);
         } catch (e) {
           log(`  [!] 区块 ${blockNum}: ${e.message?.slice(0, 60)}`);
         }
       }
 
       // Price & PnL
-      if (newArbs.length > 0) {
-        const allTokens = new Set(["0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"]);
-        for (const tx of newArbs) {
-          for (const token of Object.keys(tx.net_token_flows ?? {})) allTokens.add(token);
-        }
+      const allTokens = new Set(["0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"]);
+      for (const tx of newArbs) {
+        for (const token of Object.keys(tx.net_token_flows ?? {})) allTokens.add(token);
+      }
+      for (const sw of newSandwiches) {
+        allTokens.add(sw.entry_tx.token_in);
+        allTokens.add(sw.entry_tx.token_out);
+        allTokens.add(sw.exit_tx.token_in);
+        allTokens.add(sw.exit_tx.token_out);
+      }
+      if (allTokens.size > 1 || newArbs.length > 0 || newSandwiches.length > 0) {
         const prices = await fetchTokenPrices([...allTokens]);
         computePnl(newArbs, prices);
+        enrichSandwiches(newSandwiches, prices);
       }
 
-      // Merge: prepend new, deduplicate, cap at MAX_TXS
+      // Merge arbs
       const seen = new Set();
       const merged = [];
       for (const tx of [...newArbs, ...allTxs]) {
@@ -499,16 +701,28 @@ async function main() {
       }
       allTxs = merged;
 
+      // Merge sandwiches (dedup by entry_tx hash)
+      const seenSw = new Set();
+      const mergedSw = [];
+      for (const sw of [...newSandwiches, ...allSandwiches]) {
+        if (seenSw.has(sw.entry_tx.tx_hash)) continue;
+        seenSw.add(sw.entry_tx.tx_hash);
+        mergedSw.push(sw);
+        if (mergedSw.length >= MAX_SANDWICHES) break;
+      }
+      allSandwiches = mergedSw;
+
       await saveOutput({
         updated_at: new Date().toISOString(),
         scan_blocks: blocksToScan,
         total_arbitrage_txs: allTxs.length,
+        total_sandwiches: allSandwiches.length,
         relay_blocks: relayBlocks.slice(0, 15),
         transactions: allTxs,
+        sandwiches: allSandwiches,
       });
 
-      const newCount = newArbs.length;
-      log(`  ✓ +${newCount} 新交易, 累计 ${allTxs.length} 笔`);
+      log(`  ✓ +${newArbs.length} 套利, +${newSandwiches.length} 三明治, 累计 ${allTxs.length}/${allSandwiches.length}`);
       lastBlock = currentBlock;
     } catch (e) {
       log(`  [!] tick 错误: ${e.message?.slice(0, 80)}`);
