@@ -246,7 +246,37 @@ const CHAIN_TAB_OPTIONS: { id: ChainId; label: string }[] = [
   ...CHAINS.map((c) => ({ id: c.id, label: c.label })),
 ];
 
-function ChainTabs({
+const CHAIN_ICONS: Record<string, React.ReactNode> = {
+  all: (
+    <svg className="w-5 h-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="10" cy="10" r="7.5" />
+      <path d="M2.5 10h15M10 2.5c-2.2 2.2-3 4.6-3 7.5s.8 5.3 3 7.5M10 2.5c2.2 2.2 3 4.6 3 7.5s-.8 5.3-3 7.5" />
+    </svg>
+  ),
+  eth: (
+    <svg className="w-5 h-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round">
+      <path d="M10 2L5 10.5L10 8.5L15 10.5L10 2Z" />
+      <path d="M5 11.5L10 18L15 11.5L10 9.5L5 11.5Z" />
+    </svg>
+  ),
+  bsc: (
+    <svg className="w-5 h-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round">
+      <path d="M10 2L6 6L10 10L14 6Z" />
+      <path d="M3 10L6 7L10 11L6 15Z" />
+      <path d="M17 10L14 7L10 11L14 15Z" />
+      <path d="M10 12L6 16L10 18L14 16Z" />
+    </svg>
+  ),
+  sol: (
+    <svg className="w-5 h-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 14.5h11.5L17 17H5.5Z" />
+      <path d="M3 9.5h11.5L17 12H5.5Z" />
+      <path d="M17 5.5H5.5L3 3h11.5Z" />
+    </svg>
+  ),
+};
+
+function BottomNav({
   active,
   onChange,
 }: {
@@ -254,21 +284,26 @@ function ChainTabs({
   onChange: (c: ChainId) => void;
 }) {
   return (
-    <div className="flex gap-1 p-0.5 bg-[var(--color-surface)] rounded-[5px]">
-      {CHAIN_TAB_OPTIONS.map((c) => (
-        <button
-          key={c.id}
-          onClick={() => onChange(c.id)}
-          className={`px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-[12px] font-medium rounded-[4px] transition-colors cursor-pointer ${
-            active === c.id
-              ? "bg-[var(--color-accent)] text-[var(--color-bg)]"
-              : "text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]"
-          }`}
-        >
-          {c.label}
-        </button>
-      ))}
-    </div>
+    <nav className="fixed bottom-0 left-0 right-0 z-50 bg-[var(--color-bg)]/95 backdrop-blur-md border-t border-[var(--color-border)]">
+      <div className="max-w-screen-lg mx-auto flex">
+        {CHAIN_TAB_OPTIONS.map((c) => (
+          <button
+            key={c.id}
+            onClick={() => onChange(c.id)}
+            className={`flex-1 flex flex-col items-center gap-0.5 py-2 sm:py-2.5 transition-colors cursor-pointer ${
+              active === c.id
+                ? "text-[var(--color-accent)]"
+                : "text-[var(--color-text-dim)] hover:text-[var(--color-text-secondary)]"
+            }`}
+          >
+            {CHAIN_ICONS[c.id]}
+            <span className="text-[9px] sm:text-[10px] font-medium tracking-wide">
+              {c.id === "all" ? "All" : c.label}
+            </span>
+          </button>
+        ))}
+      </div>
+    </nav>
   );
 }
 
@@ -759,20 +794,20 @@ export default function Page() {
 
   if (loading && !hasAnyData) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4">
-        <ChainTabs active={chain} onChange={setChain} />
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 pb-16">
         <div className="text-[var(--color-text-dim)] text-sm">Loading...</div>
+        <BottomNav active={chain} onChange={setChain} />
       </div>
     );
   }
 
   if (!hasAnyData) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4">
-        <ChainTabs active={chain} onChange={setChain} />
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 pb-16">
         <div className="text-[var(--color-negative)] text-sm">
           No data available. Crawlers may not be running yet.
         </div>
+        <BottomNav active={chain} onChange={setChain} />
       </div>
     );
   }
@@ -852,9 +887,6 @@ export default function Page() {
                 Sandwich attacks {chain === "all" ? "across all chains" : `on ${chainConfig!.label}`}
               </p>
             </div>
-            <div className="hidden sm:block">
-              <ChainTabs active={chain} onChange={setChain} />
-            </div>
           </div>
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             <div className="flex items-center gap-1 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[4px] px-1.5 py-1">
@@ -907,10 +939,6 @@ export default function Page() {
               Refresh
             </button>
           </div>
-        </div>
-        {/* Chain tabs on mobile — full width row */}
-        <div className="sm:hidden">
-          <ChainTabs active={chain} onChange={setChain} />
         </div>
         {/* Date Range Filter */}
         <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-3 sm:mt-4">
@@ -1288,7 +1316,7 @@ export default function Page() {
       </section>
 
       {/* Footer */}
-      <footer className="mt-12 sm:mt-16 pb-6 sm:pb-8 text-[10px] text-[var(--color-text-dim)] border-t border-[var(--color-border)] pt-4">
+      <footer className="mt-12 sm:mt-16 pb-20 text-[10px] text-[var(--color-text-dim)] border-t border-[var(--color-border)] pt-4">
         {chain === "all"
           ? "Cross-chain sandwich attack monitoring across Ethereum, BSC, and Solana."
           : chain === "eth"
@@ -1297,6 +1325,9 @@ export default function Page() {
               ? "On-chain Swap event scanning on BSC. Sandwich = same bot front-runs & back-runs victim swaps on the same pool."
               : "On-chain DEX instruction scanning on Solana. Sandwich = same signer brackets victim swaps in the same slot."}
       </footer>
+
+      {/* Bottom Navigation */}
+      <BottomNav active={chain} onChange={setChain} />
     </div>
   );
 }
