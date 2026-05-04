@@ -309,11 +309,34 @@ function TypeTabs({
   );
 }
 
-function formatTokenAmount(raw?: string, formatted?: string): string {
-  if (formatted) return formatted;
+function formatTokenAmount(raw?: string, formatted?: string, compact?: boolean): string {
+  if (formatted) {
+    const n = Number(formatted);
+    if (!isNaN(n) && isFinite(n)) {
+      if (compact) {
+        const abs = Math.abs(n);
+        if (abs >= 1e12) return `${(n / 1e12).toFixed(2)}T`;
+        if (abs >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
+        if (abs >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+        if (abs >= 1e4) return `${(n / 1e3).toFixed(1)}K`;
+      }
+      if (Math.abs(n) >= 1e6) return n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+      if (Math.abs(n) >= 1) return n.toLocaleString("en-US", { maximumFractionDigits: 4 });
+      if (Math.abs(n) >= 0.0001) return n.toFixed(6);
+      return n.toExponential(2);
+    }
+    return formatted;
+  }
   if (!raw) return "?";
   const n = Number(raw);
   if (!isNaN(n) && isFinite(n)) {
+    if (compact) {
+      const abs = Math.abs(n);
+      if (abs >= 1e12) return `${(n / 1e12).toFixed(2)}T`;
+      if (abs >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
+      if (abs >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+      if (abs >= 1e4) return `${(n / 1e3).toFixed(1)}K`;
+    }
     if (Math.abs(n) < 0.0001) return n.toExponential(2);
     if (Math.abs(n) >= 1e6) return n.toLocaleString("en-US", { maximumFractionDigits: 0 });
     if (Math.abs(n) >= 1) return n.toLocaleString("en-US", { maximumFractionDigits: 4 });
@@ -359,13 +382,14 @@ function SandwichFlowStep({
 
   return (
     <div
-      className="px-3 py-2.5 rounded-[4px]"
+      className="px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-[4px]"
       style={{ borderLeft: `3px solid ${borderColor}`, background: bgColor }}
     >
-      <div className="flex items-center justify-between gap-2 mb-1">
-        <div className="flex items-center gap-2">
+      {/* Row 1: Role badge + label + tx link */}
+      <div className="flex items-center justify-between gap-2 mb-1.5">
+        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
           <span
-            className="text-[9px] font-bold tracking-wider px-1.5 py-0.5 rounded-[3px]"
+            className="text-[8px] sm:text-[9px] font-bold tracking-wider px-1 sm:px-1.5 py-0.5 rounded-[3px] shrink-0"
             style={{
               background: role === "victim" ? "rgba(220,60,60,0.15)" : "rgba(60,180,100,0.15)",
               color: borderColor,
@@ -373,37 +397,49 @@ function SandwichFlowStep({
           >
             {roleIcon}
           </span>
-          <span className="text-[11px] text-[var(--color-text-secondary)]">
+          <span className="text-[10px] sm:text-[11px] text-[var(--color-text-secondary)]">
             {label}
+          </span>
+          <span className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--color-text-dim)] hidden sm:inline">
+            {truncAddr(address, 6, 4)}
           </span>
         </div>
         <a
           href={`${chain.explorerTxUrl}${txHash}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-accent)] transition-colors"
+          className="font-[family-name:var(--font-mono)] text-[9px] sm:text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-accent)] transition-colors shrink-0"
         >
           {truncHash(txHash)} ↗
         </a>
       </div>
-      <div className="flex items-center gap-1 text-[12px]">
-        <span className="font-[family-name:var(--font-mono)] text-[var(--color-text-dim)]">
+
+      {/* Row 2: Address (mobile only) */}
+      <div className="sm:hidden mb-1">
+        <span className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--color-text-dim)]">
           {truncAddr(address, 6, 4)}
         </span>
-        <span className="text-[var(--color-text-dim)] mx-1">:</span>
-        <span className="font-[family-name:var(--font-mono)] tabular-nums text-[var(--color-text)]">
-          {formatTokenAmount(amountIn, amountInFormatted)}
-        </span>
-        <span className="text-[var(--color-text-secondary)] text-[11px]">
-          {tokenInSymbol || "???"}
-        </span>
-        <span className="text-[var(--color-text-dim)] mx-0.5">→</span>
-        <span className="font-[family-name:var(--font-mono)] tabular-nums text-[var(--color-text)]">
-          {formatTokenAmount(amountOut, amountOutFormatted)}
-        </span>
-        <span className="text-[var(--color-text-secondary)] text-[11px]">
-          {tokenOutSymbol || "???"}
-        </span>
+      </div>
+
+      {/* Row 3: Swap flow — stacked on mobile, inline on desktop */}
+      <div className="flex flex-col sm:flex-row sm:items-center gap-0.5 sm:gap-1 text-[11px] sm:text-[12px]">
+        <div className="flex items-center gap-1 min-w-0">
+          <span className="font-[family-name:var(--font-mono)] tabular-nums text-[var(--color-text)] truncate">
+            {formatTokenAmount(amountIn, amountInFormatted, true)}
+          </span>
+          <span className="text-[var(--color-text-secondary)] text-[10px] sm:text-[11px] shrink-0">
+            {tokenInSymbol || "???"}
+          </span>
+        </div>
+        <span className="text-[var(--color-text-dim)] mx-0.5 shrink-0 self-start sm:self-auto">→</span>
+        <div className="flex items-center gap-1 min-w-0">
+          <span className="font-[family-name:var(--font-mono)] tabular-nums text-[var(--color-text)] truncate">
+            {formatTokenAmount(amountOut, amountOutFormatted, true)}
+          </span>
+          <span className="text-[var(--color-text-secondary)] text-[10px] sm:text-[11px] shrink-0">
+            {tokenOutSymbol || "???"}
+          </span>
+        </div>
       </div>
     </div>
   );
@@ -421,36 +457,40 @@ function SandwichCard({
   onToggle: () => void;
 }) {
   return (
-    <div className="border border-[var(--color-border)] rounded-[6px] mb-3 overflow-hidden">
+    <div className="border border-[var(--color-border)] rounded-[6px] mb-2 sm:mb-3 overflow-hidden">
+      {/* Header — clickable */}
       <div
-        className="px-3 sm:px-4 py-3 cursor-pointer hover:bg-[var(--color-surface)] transition-colors"
+        className="px-2.5 sm:px-4 py-2.5 sm:py-3 cursor-pointer hover:bg-[var(--color-surface)] transition-colors"
         onClick={onToggle}
       >
-        <div className="flex items-start justify-between gap-2 mb-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-[10px] font-bold tracking-wider px-1.5 py-0.5 rounded-[3px] bg-[rgba(220,60,60,0.12)] text-[var(--color-negative)] shrink-0">
+        {/* Top row: badge + block + dex + profit */}
+        <div className="flex items-start justify-between gap-2 mb-1.5 sm:mb-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-wrap">
+            <span className="text-[9px] sm:text-[10px] font-bold tracking-wider px-1 sm:px-1.5 py-0.5 rounded-[3px] bg-[rgba(220,60,60,0.12)] text-[var(--color-negative)] shrink-0">
               SANDWICH
             </span>
-            <span className="font-[family-name:var(--font-mono)] text-[12px] text-[var(--color-text-secondary)] tabular-nums">
+            <span className="font-[family-name:var(--font-mono)] text-[11px] sm:text-[12px] text-[var(--color-text-secondary)] tabular-nums">
               #{sw.block_number}
             </span>
             <DexBadge name={sw.dex} />
           </div>
           <div className="text-right shrink-0">
             <span
-              className="font-[family-name:var(--font-mono)] text-[14px] font-semibold tabular-nums"
+              className="font-[family-name:var(--font-mono)] text-[13px] sm:text-[14px] font-semibold tabular-nums"
               style={{ color: sw.bot_profit_usd != null ? "var(--color-positive)" : "var(--color-text-dim)" }}
             >
               {sw.bot_profit_usd != null ? formatUsd(sw.bot_profit_usd) : "N/A"}
             </span>
             {sw.bot_profit_token && sw.bot_profit_amount && (
-              <div className="text-[10px] text-[var(--color-text-dim)] mt-0.5 font-[family-name:var(--font-mono)] tabular-nums">
+              <div className="text-[9px] sm:text-[10px] text-[var(--color-text-dim)] mt-0.5 font-[family-name:var(--font-mono)] tabular-nums">
                 +{formatTokenAmount(sw.bot_profit_amount)} {sw.bot_profit_token}
               </div>
             )}
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+
+        {/* Bottom row: bot address + victim count + expand hint */}
+        <div className="flex flex-wrap items-center gap-x-2 sm:gap-x-3 gap-y-1 text-[10px] sm:text-[11px]">
           <span className="text-[var(--color-text-dim)]">
             Bot: <span className="font-[family-name:var(--font-mono)]">{truncAddr(sw.bot_address, 6, 4)}</span>
           </span>
@@ -463,9 +503,10 @@ function SandwichCard({
         </div>
       </div>
 
+      {/* Expanded flow visualization */}
       {isExpanded && (
-        <div className="px-3 sm:px-4 pb-4 pt-1 bg-[var(--color-surface)]">
-          <div className="flex flex-col gap-1.5">
+        <div className="px-2 sm:px-4 pb-3 sm:pb-4 pt-1 bg-[var(--color-surface)]">
+          <div className="flex flex-col gap-1 sm:gap-1.5">
             <SandwichFlowStep
               role="bot-entry"
               label="Entry"
@@ -512,20 +553,21 @@ function SandwichCard({
             />
           </div>
 
+          {/* Profit summary */}
           {sw.bot_profit_usd != null && (
-            <div className="mt-3 pt-2.5 border-t border-[var(--color-border)] flex items-center justify-between">
-              <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-wide">
+            <div className="mt-2 sm:mt-3 pt-2 sm:pt-2.5 border-t border-[var(--color-border)] flex items-center justify-between">
+              <span className="text-[10px] sm:text-[11px] text-[var(--color-text-dim)] uppercase tracking-wide">
                 Bot Profit
               </span>
-              <div className="text-right">
+              <div className="text-right flex items-baseline gap-1.5 sm:gap-2">
                 <span
-                  className="font-[family-name:var(--font-mono)] text-[14px] font-semibold tabular-nums"
+                  className="font-[family-name:var(--font-mono)] text-[13px] sm:text-[14px] font-semibold tabular-nums"
                   style={{ color: "var(--color-positive)" }}
                 >
                   {formatUsd(sw.bot_profit_usd)}
                 </span>
                 {sw.bot_profit_token && sw.bot_profit_amount && (
-                  <span className="ml-2 text-[11px] text-[var(--color-text-secondary)] font-[family-name:var(--font-mono)] tabular-nums">
+                  <span className="text-[10px] sm:text-[11px] text-[var(--color-text-secondary)] font-[family-name:var(--font-mono)] tabular-nums">
                     ({formatTokenAmount(sw.bot_profit_amount)} {sw.bot_profit_token})
                   </span>
                 )}
@@ -1023,44 +1065,52 @@ export default function Page() {
   return (
     <div className="min-h-screen px-3 py-6 sm:px-6 sm:py-8 md:px-8 lg:px-16 max-w-[1440px] mx-auto">
       {/* Header */}
-      <header className="flex flex-col sm:flex-row items-start sm:items-end justify-between gap-3 mb-8 sm:mb-10">
-        <div className="flex items-center gap-4">
-          <div>
-            <h1 className="text-[15px] font-semibold tracking-tight leading-none">
-              MEV Scanner
-            </h1>
-            <p className="text-[11px] text-[var(--color-text-dim)] mt-1.5 tracking-wide">
-              MEV transactions on {chainConfig.label}
-            </p>
+      <header className="mb-6 sm:mb-10">
+        <div className="flex items-center justify-between gap-2 mb-3 sm:mb-0">
+          <div className="flex items-center gap-3 sm:gap-4">
+            <div>
+              <h1 className="text-[14px] sm:text-[15px] font-semibold tracking-tight leading-none">
+                MEV Scanner
+              </h1>
+              <p className="text-[10px] sm:text-[11px] text-[var(--color-text-dim)] mt-1 sm:mt-1.5 tracking-wide">
+                MEV on {chainConfig.label}
+              </p>
+            </div>
+            <div className="hidden sm:block">
+              <ChainTabs active={chain} onChange={setChain} />
+            </div>
           </div>
-          <ChainTabs active={chain} onChange={setChain} />
-        </div>
-        <div className="flex items-center gap-2 sm:gap-4 shrink-0">
-          {autoRefresh && (
-            <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-positive)]">
-              <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-positive)] animate-pulse" />
-              <span className="hidden sm:inline">Live</span>
+          <div className="flex items-center gap-2 sm:gap-4 shrink-0">
+            {autoRefresh && (
+              <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-positive)]">
+                <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-positive)] animate-pulse" />
+                <span className="hidden sm:inline">Live</span>
+              </span>
+            )}
+            <span className="text-[11px] text-[var(--color-text-dim)] hidden sm:inline">
+              {timeAgo(data.updated_at)}
             </span>
-          )}
-          <span className="text-[11px] text-[var(--color-text-dim)] hidden sm:inline">
-            {timeAgo(data.updated_at)}
-          </span>
-          <button
-            onClick={() => setAutoRefresh((v) => !v)}
-            className={`text-[11px] font-medium transition-colors cursor-pointer ${
-              autoRefresh
-                ? "text-[var(--color-text-secondary)] hover:text-[var(--color-text)]"
-                : "text-[var(--color-accent)] hover:text-[var(--color-text)]"
-            }`}
-          >
-            {autoRefresh ? "Pause" : "Resume"}
-          </button>
-          <button
-            onClick={load}
-            className="text-[11px] font-medium text-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors cursor-pointer"
-          >
-            Refresh
-          </button>
+            <button
+              onClick={() => setAutoRefresh((v) => !v)}
+              className={`text-[11px] font-medium transition-colors cursor-pointer ${
+                autoRefresh
+                  ? "text-[var(--color-text-secondary)] hover:text-[var(--color-text)]"
+                  : "text-[var(--color-accent)] hover:text-[var(--color-text)]"
+              }`}
+            >
+              {autoRefresh ? "Pause" : "Resume"}
+            </button>
+            <button
+              onClick={load}
+              className="text-[11px] font-medium text-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors cursor-pointer"
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+        {/* Chain tabs on mobile — full width row */}
+        <div className="sm:hidden">
+          <ChainTabs active={chain} onChange={setChain} />
         </div>
       </header>
 
@@ -1112,8 +1162,8 @@ export default function Page() {
 
       {/* Transactions */}
       <section>
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3 sm:mb-4">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-col gap-2.5 sm:gap-0 sm:flex-row sm:items-center justify-between mb-3 sm:mb-4">
+          <div className="flex items-center gap-2 sm:gap-3">
             <TypeTabs
               active={mevType}
               onChange={(t) => {
@@ -1125,8 +1175,8 @@ export default function Page() {
               sandwichCount={sandwiches.length}
             />
             {q && (
-              <span className="text-[11px] text-[var(--color-text-dim)]">
-                — {mevType === "arbitrage" ? filteredArb.length : filteredSandwich.length} result{(mevType === "arbitrage" ? filteredArb.length : filteredSandwich.length) !== 1 ? "s" : ""}
+              <span className="text-[10px] sm:text-[11px] text-[var(--color-text-dim)]">
+                {mevType === "arbitrage" ? filteredArb.length : filteredSandwich.length} result{(mevType === "arbitrage" ? filteredArb.length : filteredSandwich.length) !== 1 ? "s" : ""}
               </span>
             )}
           </div>
