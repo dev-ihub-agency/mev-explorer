@@ -1,10 +1,19 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+} from "recharts";
 
 // ─── Types ───
 
-type ChainId = "eth" | "bsc" | "sol";
+type ChainId = "all" | "eth" | "bsc" | "sol";
 
 interface ChainConfig {
   id: ChainId;
@@ -113,6 +122,7 @@ interface Sandwich {
   bot_profit_amount?: string;
   bot_profit_token?: string;
   explorer_base: string;
+  block_timestamp?: string;
 }
 
 
@@ -135,6 +145,20 @@ const OSS_BASE =
 function dataUrlForChain(chain: ChainId) {
   return `${OSS_BASE}/${chain}/data.json`;
 }
+
+function historyUrlForChain(chain: ChainId) {
+  return `${OSS_BASE}/${chain}/sandwich-history.json`;
+}
+
+type TimeFrame = "all" | "1d" | "7d" | "14d" | "30d" | "3m";
+const TIMEFRAMES: { id: TimeFrame; label: string; ms: number }[] = [
+  { id: "all", label: "All", ms: 0 },
+  { id: "1d", label: "1D", ms: 1 * 24 * 60 * 60 * 1000 },
+  { id: "7d", label: "7D", ms: 7 * 24 * 60 * 60 * 1000 },
+  { id: "14d", label: "14D", ms: 14 * 24 * 60 * 60 * 1000 },
+  { id: "30d", label: "30D", ms: 30 * 24 * 60 * 60 * 1000 },
+  { id: "3m", label: "3M", ms: 90 * 24 * 60 * 60 * 1000 },
+];
 
 function truncHash(hash: string) {
   if (hash.length > 20)
@@ -170,6 +194,11 @@ function formatUsd(value: number | null): string {
 
 // ─── Shared Components ───
 
+const CHAIN_TAB_OPTIONS: { id: ChainId; label: string }[] = [
+  { id: "all", label: "All Chains" },
+  ...CHAINS.map((c) => ({ id: c.id, label: c.label })),
+];
+
 function ChainTabs({
   active,
   onChange,
@@ -179,11 +208,11 @@ function ChainTabs({
 }) {
   return (
     <div className="flex gap-1 p-0.5 bg-[var(--color-surface)] rounded-[5px]">
-      {CHAINS.map((c) => (
+      {CHAIN_TAB_OPTIONS.map((c) => (
         <button
           key={c.id}
           onClick={() => onChange(c.id)}
-          className={`px-3 py-1.5 text-[12px] font-medium rounded-[4px] transition-colors cursor-pointer ${
+          className={`px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-[12px] font-medium rounded-[4px] transition-colors cursor-pointer ${
             active === c.id
               ? "bg-[var(--color-accent)] text-[var(--color-bg)]"
               : "text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]"
@@ -208,7 +237,7 @@ function Stat({
   color?: string;
 }) {
   return (
-    <div className="min-w-0">
+    <div className="min-w-0 text-center bg-[var(--color-surface)] rounded-lg px-3 py-3 sm:px-4 sm:py-4">
       <div className="text-[10px] sm:text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-dim)] mb-1 truncate">
         {label}
       </div>
@@ -384,11 +413,13 @@ function SandwichCard({
   chain,
   isExpanded,
   onToggle,
+  showChainBadge,
 }: {
-  sw: Sandwich;
+  sw: Sandwich & { chainId?: string };
   chain: ChainConfig;
   isExpanded: boolean;
   onToggle: () => void;
+  showChainBadge?: boolean;
 }) {
   return (
     <div className="border border-[var(--color-border)] rounded-[6px] mb-2 sm:mb-3 overflow-hidden">
@@ -403,6 +434,11 @@ function SandwichCard({
             <span className="text-[9px] sm:text-[10px] font-bold tracking-wider px-1 sm:px-1.5 py-0.5 rounded-[3px] bg-[rgba(220,60,60,0.12)] text-[var(--color-negative)] shrink-0">
               SANDWICH
             </span>
+            {showChainBadge && sw.chainId && (
+              <span className="text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-surface-hover)] text-[var(--color-text-secondary)] font-medium shrink-0">
+                {CHAINS.find(c => c.id === sw.chainId)?.label ?? sw.chainId}
+              </span>
+            )}
             <span className="font-[family-name:var(--font-mono)] text-[11px] sm:text-[12px] text-[var(--color-text-secondary)] tabular-nums">
               #{sw.block_number}
             </span>
@@ -558,52 +594,119 @@ function pageNumbers(current: number, total: number): (number | "...")[] {
 // ─── Main Page ───
 
 export default function Page() {
-  const [chain, setChain] = useState<ChainId>("eth");
-  const [data, setData] = useState<Data | null>(null);
+  const [chain, setChain] = useState<ChainId>("all");
+  const [allChainData, setAllChainData] = useState<Record<string, Data | null>>({ eth: null, bsc: null, sol: null });
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [chartTf, setChartTf] = useState<TimeFrame>("all");
+  const [historyData, setHistoryData] = useState<Record<string, Sandwich[]>>({ eth: [], bsc: [], sol: [] });
   const PAGE_SIZE = 20;
 
-  const chainConfig = CHAINS.find((c) => c.id === chain)!;
+  const chainConfig = chain === "all" ? null : CHAINS.find((c) => c.id === chain)!;
+  const RAW_CHAINS: ("eth" | "bsc" | "sol")[] = ["eth", "bsc", "sol"];
 
-  const load = useCallback(async () => {
-    try {
-      const url = dataUrlForChain(chain);
-      const res = await fetch(url + "?" + Date.now());
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json: Data = await res.json();
-      setData(json);
-    } catch (e) {
-      console.error("Failed to load data:", e);
-    } finally {
-      setLoading(false);
+  const loadAll = useCallback(async () => {
+    const results = await Promise.allSettled(
+      RAW_CHAINS.map(async (c) => {
+        const res = await fetch(dataUrlForChain(c) + "?" + Date.now());
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return { chain: c, data: (await res.json()) as Data };
+      })
+    );
+    const next: Record<string, Data | null> = { eth: null, bsc: null, sol: null };
+    for (const r of results) {
+      if (r.status === "fulfilled") next[r.value.chain] = r.value.data;
     }
-  }, [chain]);
+    setAllChainData(next);
+    setLoading(false);
+  }, []);
+
+  const loadHistory = useCallback(async () => {
+    const results = await Promise.allSettled(
+      RAW_CHAINS.map(async (c) => {
+        const res = await fetch(historyUrlForChain(c) + "?" + Date.now());
+        if (!res.ok) return { chain: c, data: [] as Sandwich[] };
+        return { chain: c, data: (await res.json()) as Sandwich[] };
+      })
+    );
+    const next: Record<string, Sandwich[]> = { eth: [], bsc: [], sol: [] };
+    for (const r of results) {
+      if (r.status === "fulfilled") next[r.value.chain] = r.value.data;
+    }
+    setHistoryData(next);
+  }, []);
 
   useEffect(() => {
-    setData(null);
     setLoading(true);
     setExpanded(null);
     setSearch("");
     setPage(1);
-    load();
-  }, [chain, load]);
+    loadAll();
+    loadHistory();
+  }, [loadAll, loadHistory]);
+
+  useEffect(() => {
+    setExpanded(null);
+    setSearch("");
+    setPage(1);
+  }, [chain]);
 
   useEffect(() => {
     if (!autoRefresh) return;
-    const id = setInterval(load, 15_000);
+    const id = setInterval(loadAll, 15_000);
     return () => clearInterval(id);
-  }, [autoRefresh, load]);
+  }, [autoRefresh, loadAll]);
 
   const toggle = useCallback(
     (hash: string) => setExpanded((v) => (v === hash ? null : hash)),
     []
   );
 
-  if (loading && !data) {
+  const chartData = useMemo(() => {
+    const historyChains = chain === "all" ? RAW_CHAINS : [chain as "eth" | "bsc" | "sol"];
+    const allHistory = historyChains.flatMap(
+      (c) => (historyData[c] ?? []).filter((sw) => {
+        const p = sw.bot_profit_usd ?? 0;
+        return p >= -10 && p <= 1000 && sw.block_timestamp;
+      })
+    );
+    const tfConfig = TIMEFRAMES.find((t) => t.id === chartTf)!;
+    const cutoff = tfConfig.ms > 0 ? Date.now() - tfConfig.ms : 0;
+    const filtered = allHistory.filter(
+      (sw) => new Date(sw.block_timestamp!).getTime() > cutoff
+    );
+    filtered.sort(
+      (a, b) => new Date(a.block_timestamp!).getTime() - new Date(b.block_timestamp!).getTime()
+    );
+
+    const buckets = new Map<string, { date: string; profit: number; count: number }>();
+    for (const sw of filtered) {
+      const d = new Date(sw.block_timestamp!);
+      const useHourly = chartTf === "1d";
+      const key = useHourly
+        ? `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")} ${String(d.getUTCHours()).padStart(2, "0")}:00`
+        : `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+      const existing = buckets.get(key) || { date: key, profit: 0, count: 0 };
+      existing.profit += sw.bot_profit_usd ?? 0;
+      existing.count += 1;
+      buckets.set(key, existing);
+    }
+
+    let cumulative = 0;
+    return Array.from(buckets.values()).map((b) => {
+      cumulative += b.profit;
+      return { ...b, profit: Math.round(b.profit * 100) / 100, cumulative: Math.round(cumulative * 100) / 100 };
+    });
+  }, [historyData, chartTf, chain]);
+
+  const hasAnyData = RAW_CHAINS.some((c) => allChainData[c] !== null);
+
+  if (loading && !hasAnyData) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4">
         <ChainTabs active={chain} onChange={setChain} />
@@ -612,33 +715,44 @@ export default function Page() {
     );
   }
 
-  if (!data) {
+  if (!hasAnyData) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4">
         <ChainTabs active={chain} onChange={setChain} />
         <div className="text-[var(--color-negative)] text-sm">
-          No data available for {chainConfig.label}. Crawler may not be running yet.
+          No data available. Crawlers may not be running yet.
         </div>
       </div>
     );
   }
 
-  const hasRelay = data.relay_blocks && data.relay_blocks.length > 0;
-  const maxMev = hasRelay
-    ? Math.max(...data.relay_blocks.map((b) => b.value_eth))
-    : 0;
-  const avgMev = hasRelay
-    ? data.relay_blocks.reduce((s, b) => s + b.value_eth, 0) /
-      data.relay_blocks.length
-    : 0;
+  const dateFromMs = dateFrom ? new Date(dateFrom + "T00:00:00").getTime() : 0;
+  const dateToMs = dateTo ? new Date(dateTo + "T23:59:59").getTime() : Infinity;
 
-  const sandwiches = data.sandwiches ?? [];
+  const hasDateFilter = dateFrom !== "" || dateTo !== "";
+  const profitFilter = (sw: Sandwich) => {
+    const p = sw.bot_profit_usd ?? 0;
+    if (p < -10 || p > 1000) return false;
+    if (hasDateFilter) {
+      if (!sw.block_timestamp) return false;
+      const t = new Date(sw.block_timestamp).getTime();
+      if (isNaN(t)) return false;
+      if (t < dateFromMs || t > dateToMs) return false;
+    }
+    return true;
+  };
+
+  const chainsToShow = chain === "all" ? RAW_CHAINS : [chain as "eth" | "bsc" | "sol"];
+  const sandwiches: (Sandwich & { chainId?: string })[] = chainsToShow.flatMap(
+    (c) => (allChainData[c]?.sandwiches ?? []).filter(profitFilter).map((sw) => ({ ...sw, chainId: c }))
+  );
 
   const totalSandwichProfit = sandwiches.reduce(
     (s, sw) => s + (sw.bot_profit_usd ?? 0),
     0
   );
   const totalVictims = sandwiches.reduce((s, sw) => s + sw.victims.length, 0);
+  const totalBlocks = chainsToShow.reduce((s, c) => s + (allChainData[c]?.scan_blocks ?? 0), 0);
 
   const q = search.trim().toLowerCase();
 
@@ -650,6 +764,7 @@ export default function Page() {
           sw.exit_tx.tx_hash.toLowerCase().includes(q) ||
           sw.block_number.toString().includes(q) ||
           sw.dex.toLowerCase().includes(q) ||
+          (sw.chainId ?? "").toLowerCase().includes(q) ||
           sw.victims.some(
             (v) =>
               v.from_address.toLowerCase().includes(q) ||
@@ -665,7 +780,12 @@ export default function Page() {
     safePage * PAGE_SIZE
   );
 
-  const blockLabel = chain === "sol" ? "slots" : "blocks";
+  const blockLabel = chain === "sol" ? "slots" : chain === "all" ? "blocks/slots" : "blocks";
+
+  const top10Trades = [...sandwiches]
+    .filter((sw) => sw.bot_profit_usd !== null && sw.bot_profit_usd > 0)
+    .sort((a, b) => (b.bot_profit_usd ?? 0) - (a.bot_profit_usd ?? 0))
+    .slice(0, 10);
 
   return (
     <div className="min-h-screen px-3 py-6 sm:px-6 sm:py-8 md:px-8 lg:px-16 max-w-[1440px] mx-auto">
@@ -678,7 +798,7 @@ export default function Page() {
                 MEV Scanner
               </h1>
               <p className="text-[10px] sm:text-[11px] text-[var(--color-text-dim)] mt-1 sm:mt-1.5 tracking-wide">
-                Sandwich attacks on {chainConfig.label}
+                Sandwich attacks {chain === "all" ? "across all chains" : `on ${chainConfig!.label}`}
               </p>
             </div>
             <div className="hidden sm:block">
@@ -693,7 +813,13 @@ export default function Page() {
               </span>
             )}
             <span className="text-[11px] text-[var(--color-text-dim)] hidden sm:inline">
-              {timeAgo(data.updated_at)}
+              {timeAgo(
+                RAW_CHAINS
+                  .map((c) => allChainData[c]?.updated_at)
+                  .filter(Boolean)
+                  .sort()
+                  .pop() ?? new Date().toISOString()
+              )}
             </span>
             <button
               onClick={() => setAutoRefresh((v) => !v)}
@@ -706,7 +832,7 @@ export default function Page() {
               {autoRefresh ? "Pause" : "Resume"}
             </button>
             <button
-              onClick={load}
+              onClick={loadAll}
               className="text-[11px] font-medium text-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors cursor-pointer"
             >
               Refresh
@@ -717,14 +843,265 @@ export default function Page() {
         <div className="sm:hidden">
           <ChainTabs active={chain} onChange={setChain} />
         </div>
+        {/* Date Range Filter */}
+        <div className="flex flex-wrap items-center gap-2 mt-3 sm:mt-4">
+          <span className="text-[10px] sm:text-[11px] text-[var(--color-text-dim)] uppercase tracking-wide">Date Range</span>
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
+            className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[4px] px-2 py-1 text-[11px] sm:text-[12px] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-accent-dim)] transition-colors font-[family-name:var(--font-mono)] [color-scheme:dark]"
+          />
+          <span className="text-[11px] text-[var(--color-text-dim)]">—</span>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
+            className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[4px] px-2 py-1 text-[11px] sm:text-[12px] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-accent-dim)] transition-colors font-[family-name:var(--font-mono)] [color-scheme:dark]"
+          />
+          {(dateFrom || dateTo) && (
+            <button
+              onClick={() => { setDateFrom(""); setDateTo(""); setPage(1); }}
+              className="text-[10px] sm:text-[11px] text-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors cursor-pointer"
+            >
+              Clear
+            </button>
+          )}
+        </div>
       </header>
 
-      {/* Stats */}
-      <section className="grid grid-cols-2 sm:grid-cols-4 gap-4 sm:gap-6 mb-8 sm:mb-10 pb-6 sm:pb-8 border-b border-[var(--color-border)]">
+      {/* MEV Stats — follows current chain + date/profit filter */}
+      <section className="mb-8 sm:mb-10 pb-6 sm:pb-8 border-b border-[var(--color-border)]">
+        <h2 className="text-[12px] font-medium uppercase tracking-[0.06em] text-[var(--color-text-secondary)] mb-4">
+          MEV Stats {chain !== "all" && <span className="normal-case">— {chainConfig!.label}</span>}
+        </h2>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-6">
+          <div className="bg-[var(--color-surface)] rounded-lg px-4 py-4 sm:p-5 text-center">
+            <div className="text-[10px] sm:text-[11px] text-[var(--color-text-dim)] uppercase tracking-wide mb-1.5 sm:mb-2">
+              Average Profit
+            </div>
+            <div className="font-[family-name:var(--font-mono)] text-[20px] sm:text-[22px] font-bold tabular-nums text-[var(--color-positive)]">
+              {sandwiches.length > 0 ? formatUsd(totalSandwichProfit / sandwiches.length) : "—"}
+            </div>
+          </div>
+          <div className="bg-[var(--color-surface)] rounded-lg px-4 py-4 sm:p-5 text-center">
+            <div className="text-[10px] sm:text-[11px] text-[var(--color-text-dim)] uppercase tracking-wide mb-1.5 sm:mb-2">
+              Total Profit
+            </div>
+            <div className="font-[family-name:var(--font-mono)] text-[20px] sm:text-[22px] font-bold tabular-nums text-[var(--color-positive)]">
+              {sandwiches.length > 0 ? formatUsd(totalSandwichProfit) : "—"}
+            </div>
+          </div>
+          <div className="bg-[var(--color-surface)] rounded-lg px-4 py-4 sm:p-5 text-center">
+            <div className="text-[10px] sm:text-[11px] text-[var(--color-text-dim)] uppercase tracking-wide mb-1.5 sm:mb-2">
+              Transactions Count
+            </div>
+            <div className="font-[family-name:var(--font-mono)] text-[20px] sm:text-[22px] font-bold tabular-nums text-[var(--color-accent)]">
+              {sandwiches.length.toLocaleString()}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Per-Chain Breakdown (only in All view) */}
+      {chain === "all" && (
+        <section className="mb-8 sm:mb-10 pb-6 sm:pb-8 border-b border-[var(--color-border)]">
+          <h2 className="text-[12px] font-medium uppercase tracking-[0.06em] text-[var(--color-text-secondary)] mb-4">
+            Per-Chain Stats
+          </h2>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+            {RAW_CHAINS.map((c) => {
+              const chainCfg = CHAINS.find((ch) => ch.id === c)!;
+              const chainSw = (allChainData[c]?.sandwiches ?? []).filter(profitFilter);
+              const chainProfit = chainSw.reduce((s, sw) => s + (sw.bot_profit_usd ?? 0), 0);
+              const chainBlocks = allChainData[c]?.scan_blocks ?? 0;
+              return (
+                <div
+                  key={c}
+                  className="bg-[var(--color-surface)] rounded-lg px-4 py-3 sm:p-4 cursor-pointer hover:border-[var(--color-accent)] border border-[var(--color-border)] transition-colors"
+                  onClick={() => setChain(c)}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[11px] sm:text-[12px] font-medium text-[var(--color-text)]">
+                      {chainCfg.label}
+                    </span>
+                    <span className="text-[10px] text-[var(--color-text-dim)]">
+                      {chainBlocks} {c === "sol" ? "slots" : "blocks"}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div>
+                      <div className="text-[9px] text-[var(--color-text-dim)] uppercase">Txns</div>
+                      <div className="font-[family-name:var(--font-mono)] text-[13px] sm:text-[14px] font-semibold tabular-nums text-[var(--color-text)]">
+                        {chainSw.length}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[9px] text-[var(--color-text-dim)] uppercase">Profit</div>
+                      <div className="font-[family-name:var(--font-mono)] text-[13px] sm:text-[14px] font-semibold tabular-nums text-[var(--color-positive)]">
+                        {chainSw.length > 0 ? formatUsd(chainProfit) : "—"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[9px] text-[var(--color-text-dim)] uppercase">Avg</div>
+                      <div className="font-[family-name:var(--font-mono)] text-[13px] sm:text-[14px] font-semibold tabular-nums text-[var(--color-positive)]">
+                        {chainSw.length > 0 ? formatUsd(chainProfit / chainSw.length) : "—"}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* Profit Chart */}
+      <section className="mb-8 sm:mb-10 pb-6 sm:pb-8 border-b border-[var(--color-border)]">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+          <h2 className="text-[12px] font-medium uppercase tracking-[0.06em] text-[var(--color-text-secondary)]">
+            Profit Over Time
+          </h2>
+          <div className="flex gap-1 p-0.5 bg-[var(--color-surface)] rounded-[5px]">
+            {TIMEFRAMES.map((tf) => (
+              <button
+                key={tf.id}
+                onClick={() => setChartTf(tf.id)}
+                className={`px-2.5 py-1 text-[11px] font-medium rounded-[4px] transition-colors cursor-pointer ${
+                  chartTf === tf.id
+                    ? "bg-[var(--color-accent)] text-[var(--color-bg)]"
+                    : "text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]"
+                }`}
+              >
+                {tf.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {chartData.length > 0 ? (
+          <div className="bg-[var(--color-surface)] rounded-lg p-3 sm:p-4">
+            <ResponsiveContainer width="100%" height={240}>
+              <AreaChart data={chartData} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="profitGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#22c55e" stopOpacity={0.3} />
+                    <stop offset="100%" stopColor="#22c55e" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10, fill: "rgba(255,255,255,0.4)" }}
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={(v: string) => {
+                    if (v.includes(":")) return v.split(" ")[1];
+                    const parts = v.split("-");
+                    return `${parts[1]}/${parts[2]}`;
+                  }}
+                  interval="preserveStartEnd"
+                  minTickGap={40}
+                />
+                <YAxis
+                  tick={{ fontSize: 10, fill: "rgba(255,255,255,0.4)" }}
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={(v: number) => `$${v >= 1000 ? `${(v / 1000).toFixed(1)}K` : v.toFixed(0)}`}
+                  width={50}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: "rgba(15,15,20,0.95)",
+                    border: "1px solid rgba(255,255,255,0.1)",
+                    borderRadius: "6px",
+                    fontSize: "11px",
+                    color: "#fff",
+                  }}
+                  formatter={(value: unknown, name: unknown) => [
+                    `$${Number(value).toFixed(2)}`,
+                    name === "cumulative" ? "Cumulative" : "Profit",
+                  ]}
+                  labelFormatter={(label: unknown) => `Date: ${label}`}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="cumulative"
+                  stroke="#22c55e"
+                  strokeWidth={2}
+                  fill="url(#profitGrad)"
+                  dot={false}
+                  activeDot={{ r: 4, fill: "#22c55e" }}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+            <div className="flex justify-center gap-4 mt-2 text-[10px] text-[var(--color-text-dim)]">
+              <span>{chartData.length} data points</span>
+              <span>Total: {formatUsd(chartData[chartData.length - 1]?.cumulative ?? 0)}</span>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-[var(--color-surface)] rounded-lg p-8 text-center text-[var(--color-text-dim)] text-sm">
+            No historical data yet. Chart will populate as crawlers collect data over time.
+          </div>
+        )}
+      </section>
+
+      {/* Top 10 Trades */}
+      {top10Trades.length > 0 && (
+        <section className="mb-8 sm:mb-10 pb-6 sm:pb-8 border-b border-[var(--color-border)]">
+          <h2 className="text-[12px] font-medium uppercase tracking-[0.06em] text-[var(--color-text-secondary)] mb-4">
+            Top Trades
+          </h2>
+          <div className="bg-[var(--color-surface)] rounded-lg overflow-hidden">
+            {top10Trades.map((sw, i) => {
+              const chainCfg = CHAINS.find((c) => c.id === sw.chainId) ?? (chainConfig || CHAINS[0]);
+              return (
+                <div
+                  key={sw.entry_tx.tx_hash + "-" + i}
+                  className={`px-3 sm:px-4 py-3 ${i < top10Trades.length - 1 ? "border-b border-[var(--color-border)]" : ""}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                      <span className="text-[11px] font-medium text-[var(--color-text-dim)] shrink-0">
+                        #{i + 1}
+                      </span>
+                      <span className="text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-surface-hover)] text-[var(--color-text-secondary)] font-medium shrink-0">
+                        {chainCfg.label}
+                      </span>
+                      <a
+                        href={`${chainCfg.explorerTxUrl}${sw.entry_tx.tx_hash}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-accent)] transition-colors truncate"
+                      >
+                        {truncHash(sw.entry_tx.tx_hash)}
+                      </a>
+                    </div>
+                    <div className="font-[family-name:var(--font-mono)] text-[13px] sm:text-[14px] font-semibold tabular-nums text-[var(--color-positive)] shrink-0">
+                      {formatUsd(sw.bot_profit_usd ?? 0)}
+                    </div>
+                  </div>
+                  {sw.bot_profit_amount && sw.bot_profit_token && (
+                    <div className="hidden sm:flex mt-1 ml-[calc(1ch+2rem)] text-[11px] text-[var(--color-text-dim)] font-[family-name:var(--font-mono)] tabular-nums">
+                      {sw.bot_profit_amount} {sw.bot_profit_token}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-[10px] text-[var(--color-text-dim)] mt-2 text-center">
+            Top 10 trades (by profit)
+          </p>
+        </section>
+      )}
+
+      {/* Current View Stats */}
+      <section className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-8 sm:mb-10 pb-6 sm:pb-8 border-b border-[var(--color-border)]">
         <Stat
           label="Sandwich Attacks"
           value={sandwiches.length}
-          sub={`from ${data.scan_blocks} ${blockLabel}`}
+          sub={`from ${totalBlocks} ${blockLabel}`}
         />
         <Stat
           label="Bot Profit"
@@ -782,15 +1159,21 @@ export default function Page() {
         </div>
 
         <div className="space-y-0">
-          {pagedSandwiches.map((sw, i) => (
-            <SandwichCard
-              key={sw.entry_tx.tx_hash + "-" + i}
-              sw={sw}
-              chain={chainConfig}
-              isExpanded={expanded === sw.entry_tx.tx_hash}
-              onToggle={() => toggle(sw.entry_tx.tx_hash)}
-            />
-          ))}
+          {pagedSandwiches.map((sw, i) => {
+            const swChain = chain === "all"
+              ? CHAINS.find((c) => c.id === sw.chainId) ?? CHAINS[0]
+              : chainConfig!;
+            return (
+              <SandwichCard
+                key={sw.entry_tx.tx_hash + "-" + i}
+                sw={sw}
+                chain={swChain}
+                isExpanded={expanded === sw.entry_tx.tx_hash}
+                onToggle={() => toggle(sw.entry_tx.tx_hash)}
+                showChainBadge={chain === "all"}
+              />
+            );
+          })}
         </div>
         {filteredSandwich.length === 0 && (
           <div className="text-center py-16 text-[var(--color-text-dim)] text-sm">
@@ -836,11 +1219,13 @@ export default function Page() {
 
       {/* Footer */}
       <footer className="mt-12 sm:mt-16 pb-6 sm:pb-8 text-[10px] text-[var(--color-text-dim)] border-t border-[var(--color-border)] pt-4">
-        {chain === "eth"
-          ? "On-chain Swap event scanning. Sandwich = same bot front-runs & back-runs victim swaps on the same pool within one block."
-          : chain === "bsc"
-            ? "On-chain Swap event scanning on BSC. Sandwich = same bot front-runs & back-runs victim swaps on the same pool."
-            : "On-chain DEX instruction scanning on Solana. Sandwich = same signer brackets victim swaps in the same slot."}
+        {chain === "all"
+          ? "Cross-chain sandwich attack monitoring across Ethereum, BSC, and Solana."
+          : chain === "eth"
+            ? "On-chain Swap event scanning. Sandwich = same bot front-runs & back-runs victim swaps on the same pool within one block."
+            : chain === "bsc"
+              ? "On-chain Swap event scanning on BSC. Sandwich = same bot front-runs & back-runs victim swaps on the same pool."
+              : "On-chain DEX instruction scanning on Solana. Sandwich = same signer brackets victim swaps in the same slot."}
       </footer>
     </div>
   );

@@ -50,6 +50,8 @@ const ossClient = new OSS({
 });
 
 const OSS_KEY = "bsc/data.json";
+const OSS_HISTORY_KEY = "bsc/sandwich-history.json";
+const HISTORY_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 
 async function uploadToOSS(filePath) {
   try {
@@ -62,6 +64,30 @@ async function uploadToOSS(filePath) {
     log(`  ✓ 已上传到 OSS: ${result.url}`);
   } catch (e) {
     log(`  [!] OSS 上传失败: ${e.message}`);
+  }
+}
+
+async function appendSandwichHistory(newSandwiches) {
+  if (!newSandwiches || newSandwiches.length === 0) return;
+  try {
+    let existing = [];
+    try {
+      const res = await ossClient.get(OSS_HISTORY_KEY);
+      existing = JSON.parse(res.content.toString());
+    } catch { }
+    const seenTx = new Set(existing.map(s => s.entry_tx?.tx_hash));
+    const toAdd = newSandwiches.filter(s => s.block_timestamp && !seenTx.has(s.entry_tx?.tx_hash));
+    if (toAdd.length === 0) return;
+    const merged = [...existing, ...toAdd];
+    const cutoff = Date.now() - HISTORY_MAX_AGE_MS;
+    const trimmed = merged.filter(s => new Date(s.block_timestamp).getTime() > cutoff);
+    const buf = Buffer.from(JSON.stringify(trimmed), "utf-8");
+    await ossClient.put(OSS_HISTORY_KEY, buf, {
+      headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30" },
+    });
+    log(`  ✓ 历史记录: +${toAdd.length}, 总计 ${trimmed.length} 条`);
+  } catch (e) {
+    log(`  [!] 历史记录更新失败: ${e.message}`);
   }
 }
 
@@ -375,13 +401,18 @@ async function scanBlocks(provider, numBlocks = SCAN_BLOCKS) {
     log(`  扫描区块 ${bn}...`);
 
     try {
-      const receipts = await provider.send("eth_getBlockReceipts", [hex]);
+      const [receipts, block] = await Promise.all([
+        provider.send("eth_getBlockReceipts", [hex]),
+        provider.send("eth_getBlockByNumber", [hex, false]),
+      ]);
       if (!receipts) {
         log(`    跳过 (无数据)`);
         continue;
       }
+      const blockTimestamp = block?.timestamp ? new Date(parseInt(block.timestamp, 16) * 1000).toISOString() : null;
       const arbs = analyzeReceipts(receipts, bn);
       const sws = detectSandwiches(receipts, bn);
+      for (const sw of sws) sw.block_timestamp = blockTimestamp;
       log(`    ${receipts.length} 笔交易, ${arbs.length} 笔套利, ${sws.length} 笔三明治`);
       allArb.push(...arbs);
       allSandwich.push(...sws);
@@ -504,6 +535,7 @@ async function saveOutput(output) {
   fs.mkdirSync("public", { recursive: true });
   fs.writeFileSync(OUTPUT_FILE, JSON.stringify(output, null, 2), "utf-8");
   await uploadToOSS(OUTPUT_FILE);
+  await appendSandwichHistory(output.sandwiches);
 }
 
 async function main() {
@@ -561,8 +593,8 @@ async function main() {
   let lastBlock = 0;
   let allTxs = [];
   let allSandwiches = [];
-  const MAX_TXS = 200;
-  const MAX_SANDWICHES = 100;
+  const MAX_TXS = 500;
+  const MAX_SANDWICHES = 300;
 
   async function tick() {
     try {
@@ -582,10 +614,15 @@ async function main() {
         const blockNum = currentBlock - i;
         const hex = "0x" + blockNum.toString(16);
         try {
-          const receipts = await provider.send("eth_getBlockReceipts", [hex]);
+          const [receipts, block] = await Promise.all([
+            provider.send("eth_getBlockReceipts", [hex]),
+            provider.send("eth_getBlockByNumber", [hex, false]),
+          ]);
           if (!receipts) continue;
+          const blockTimestamp = block?.timestamp ? new Date(parseInt(block.timestamp, 16) * 1000).toISOString() : null;
           const arbs = analyzeReceipts(receipts, blockNum);
           const sws = detectSandwiches(receipts, blockNum);
+          for (const sw of sws) sw.block_timestamp = blockTimestamp;
           if (arbs.length > 0 || sws.length > 0) {
             log(`  区块 ${blockNum}: ${arbs.length} 笔套利, ${sws.length} 笔三明治`);
           }

@@ -47,6 +47,8 @@ const ossClient = new OSS({
 });
 
 const OSS_KEY = "sol/data.json";
+const OSS_HISTORY_KEY = "sol/sandwich-history.json";
+const HISTORY_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 
 async function uploadToOSS(filePath) {
   try {
@@ -59,6 +61,30 @@ async function uploadToOSS(filePath) {
     log(`  ✓ 已上传到 OSS: ${result.url}`);
   } catch (e) {
     log(`  [!] OSS 上传失败: ${e.message}`);
+  }
+}
+
+async function appendSandwichHistory(newSandwiches) {
+  if (!newSandwiches || newSandwiches.length === 0) return;
+  try {
+    let existing = [];
+    try {
+      const res = await ossClient.get(OSS_HISTORY_KEY);
+      existing = JSON.parse(res.content.toString());
+    } catch { }
+    const seenTx = new Set(existing.map(s => s.entry_tx?.tx_hash));
+    const toAdd = newSandwiches.filter(s => s.block_timestamp && !seenTx.has(s.entry_tx?.tx_hash));
+    if (toAdd.length === 0) return;
+    const merged = [...existing, ...toAdd];
+    const cutoff = Date.now() - HISTORY_MAX_AGE_MS;
+    const trimmed = merged.filter(s => new Date(s.block_timestamp).getTime() > cutoff);
+    const buf = Buffer.from(JSON.stringify(trimmed), "utf-8");
+    await ossClient.put(OSS_HISTORY_KEY, buf, {
+      headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30" },
+    });
+    log(`  ✓ 历史记录: +${toAdd.length}, 总计 ${trimmed.length} 条`);
+  } catch (e) {
+    log(`  [!] 历史记录更新失败: ${e.message}`);
   }
 }
 
@@ -459,8 +485,10 @@ async function scanSlots(conn, numSlots = SCAN_SLOTS) {
         log(`    跳过 (无数据)`);
         continue;
       }
+      const blockTimestamp = block.blockTime ? new Date(block.blockTime * 1000).toISOString() : null;
       const arbs = analyzeBlock(block, slot);
       const sandwiches = detectSandwiches(block, slot);
+      for (const sw of sandwiches) sw.block_timestamp = blockTimestamp;
       log(`    ${block.transactions?.length ?? 0} 笔交易, ${arbs.length} 笔套利, ${sandwiches.length} 笔夹子`);
       allArb.push(...arbs);
       allSandwiches.push(...sandwiches);
@@ -570,6 +598,7 @@ async function saveOutput(output) {
   fs.mkdirSync("public", { recursive: true });
   fs.writeFileSync(OUTPUT_FILE, JSON.stringify(output, null, 2), "utf-8");
   await uploadToOSS(OUTPUT_FILE);
+  await appendSandwichHistory(output.sandwiches);
 }
 
 async function main() {
@@ -630,8 +659,8 @@ async function main() {
   let lastSlot = 0;
   let allTxs = [];
   let allSandwiches = [];
-  const MAX_TXS = 200;
-  const MAX_SANDWICHES = 100;
+  const MAX_TXS = 500;
+  const MAX_SANDWICHES = 300;
 
   async function tick() {
     try {
@@ -656,8 +685,10 @@ async function main() {
             rewards: false,
           });
           if (!block) continue;
+          const blockTimestamp = block.blockTime ? new Date(block.blockTime * 1000).toISOString() : null;
           const arbs = analyzeBlock(block, s);
           const sandwiches = detectSandwiches(block, s);
+          for (const sw of sandwiches) sw.block_timestamp = blockTimestamp;
           if (arbs.length > 0 || sandwiches.length > 0) {
             log(`  slot ${s}: ${arbs.length} 笔套利, ${sandwiches.length} 笔夹子`);
           }
