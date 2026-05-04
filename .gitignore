@@ -1,0 +1,7 @@
+node_modules/
+.next/
+public/data.json
+web/public/data.json
+*.log
+.env
+.env.*

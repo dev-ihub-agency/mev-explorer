@@ -1,0 +1,14 @@
+{
+  "name": "mev-explorer",
+  "version": "1.0.0",
+  "description": "MEV 套利交易爬虫 & 前端展示",
+  "type": "module",
+  "scripts": {
+    "crawl": "node crawler.js",
+    "watch": "node crawler.js --watch",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ethers": "^6.13.0"
+  }
+}
