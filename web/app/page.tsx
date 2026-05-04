@@ -115,7 +115,6 @@ interface Sandwich {
   explorer_base: string;
 }
 
-type MevType = "arbitrage" | "sandwich";
 
 interface Data {
   updated_at: string;
@@ -168,10 +167,6 @@ function formatUsd(value: number | null): string {
   return `${prefix}$${abs.toFixed(4)}`;
 }
 
-function pnlColor(pnl: number | null) {
-  if (pnl === null) return "var(--color-text-dim)";
-  return pnl >= 0 ? "var(--color-positive)" : "var(--color-negative)";
-}
 
 // ─── Shared Components ───
 
@@ -247,67 +242,6 @@ function DexBadge({ name }: { name: string }) {
   );
 }
 
-function SwapDots({ count }: { count: number }) {
-  const n = Math.min(count, 8);
-  return (
-    <span className="inline-flex items-center gap-[3px] ml-2">
-      {Array.from({ length: n }).map((_, i) => (
-        <span
-          key={i}
-          className="w-[5px] h-[5px] rounded-full"
-          style={{
-            background:
-              i < 2
-                ? "var(--color-accent)"
-                : i < 4
-                  ? "var(--color-accent-dim)"
-                  : "var(--color-text-dim)",
-          }}
-        />
-      ))}
-      {count > 8 && (
-        <span className="text-[10px] text-[var(--color-text-dim)]">
-          +{count - 8}
-        </span>
-      )}
-    </span>
-  );
-}
-
-function TypeTabs({
-  active,
-  onChange,
-  arbCount,
-  sandwichCount,
-}: {
-  active: MevType;
-  onChange: (t: MevType) => void;
-  arbCount: number;
-  sandwichCount: number;
-}) {
-  const tabs: { id: MevType; label: string; count: number }[] = [
-    { id: "sandwich", label: "Sandwich", count: sandwichCount },
-    { id: "arbitrage", label: "Arbitrage", count: arbCount },
-  ];
-  return (
-    <div className="flex gap-1 p-0.5 bg-[var(--color-surface)] rounded-[5px]">
-      {tabs.map((t) => (
-        <button
-          key={t.id}
-          onClick={() => onChange(t.id)}
-          className={`px-3 py-1.5 text-[12px] font-medium rounded-[4px] transition-colors cursor-pointer ${
-            active === t.id
-              ? "bg-[var(--color-accent)] text-[var(--color-bg)]"
-              : "text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]"
-          }`}
-        >
-          {t.label}
-          <span className="ml-1 opacity-70 tabular-nums">({t.count})</span>
-        </button>
-      ))}
-    </div>
-  );
-}
 
 function formatTokenAmount(raw?: string, formatted?: string, compact?: boolean): string {
   if (formatted) {
@@ -580,309 +514,6 @@ function SandwichCard({
   );
 }
 
-function Detail({
-  label,
-  children,
-  mono,
-}: {
-  label: string;
-  children: React.ReactNode;
-  mono?: boolean;
-}) {
-  return (
-    <div className="flex flex-col gap-0.5 min-w-0">
-      <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wide">
-        {label}
-      </span>
-      <span
-        className={`${mono ? "font-[family-name:var(--font-mono)]" : ""} text-[12px] text-[var(--color-text-secondary)] break-all leading-relaxed`}
-      >
-        {children}
-      </span>
-    </div>
-  );
-}
-
-function ExternalLinks({
-  tx,
-  chain,
-  className,
-}: {
-  tx: Transaction;
-  chain: ChainConfig;
-  className?: string;
-}) {
-  return (
-    <span className={`inline-flex gap-3 text-[11px] ${className ?? ""}`}>
-      <a
-        href={`${chain.explorerTxUrl}${tx.tx_hash}`}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={(e) => e.stopPropagation()}
-        className="text-[var(--color-text-dim)] hover:text-[var(--color-accent)] active:text-[var(--color-accent)] transition-colors"
-      >
-        {chain.explorerLabel} ↗
-      </a>
-      <a
-        href={chain.secondaryExplorerUrl(tx.tx_hash)}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={(e) => e.stopPropagation()}
-        className="text-[var(--color-text-dim)] hover:text-[var(--color-accent)] active:text-[var(--color-accent)] transition-colors"
-      >
-        {chain.secondaryExplorerLabel} ↗
-      </a>
-    </span>
-  );
-}
-
-function PnlBreakdown({ tx }: { tx: Transaction }) {
-  if (tx.pnl_usd === null) return null;
-  return (
-    <div className="flex flex-wrap gap-x-6 gap-y-2 mb-4 pb-3 border-b border-[var(--color-border)]">
-      <div>
-        <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wide">
-          Revenue
-        </span>
-        <div className="font-[family-name:var(--font-mono)] text-[13px] sm:text-[14px] mt-0.5 tabular-nums">
-          {formatUsd(tx.revenue_usd)}
-        </div>
-      </div>
-      <div className="text-[var(--color-text-dim)] self-end text-[13px]">−</div>
-      <div>
-        <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wide">
-          Gas Cost
-        </span>
-        <div className="font-[family-name:var(--font-mono)] text-[13px] sm:text-[14px] mt-0.5 tabular-nums">
-          {formatUsd(tx.gas_cost_usd)}
-        </div>
-      </div>
-      <div className="text-[var(--color-text-dim)] self-end text-[13px]">=</div>
-      <div>
-        <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wide">
-          Net PnL
-        </span>
-        <div
-          className="font-[family-name:var(--font-mono)] text-[13px] sm:text-[14px] font-semibold mt-0.5 tabular-nums"
-          style={{ color: pnlColor(tx.pnl_usd) }}
-        >
-          {formatUsd(tx.pnl_usd)}
-        </div>
-      </div>
-      {tx.profit_token && (
-        <div className="sm:ml-auto sm:text-right">
-          <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wide">
-            Profit Token
-          </span>
-          <div className="text-[12px] sm:text-[13px] mt-0.5">
-            <span className="font-[family-name:var(--font-mono)] tabular-nums">
-              {tx.profit_token_amount?.toFixed(6)}
-            </span>{" "}
-            <span className="text-[var(--color-text-secondary)]">
-              {tx.profit_token}
-            </span>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ExpandedDetails({
-  tx,
-  chain,
-}: {
-  tx: Transaction;
-  chain: ChainConfig;
-}) {
-  return (
-    <div className="px-3 sm:px-5 py-4 bg-[var(--color-surface)]">
-      <PnlBreakdown tx={tx} />
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-3 text-[12px]">
-        <div className="sm:col-span-2 lg:col-span-3">
-          <Detail label="Transaction Hash" mono>
-            {tx.tx_hash}
-          </Detail>
-        </div>
-        <Detail label="From" mono>
-          {tx.from_address || "—"}
-        </Detail>
-        {tx.to_address && (
-          <Detail label="To (Contract)" mono>
-            {tx.to_address}
-          </Detail>
-        )}
-        <Detail label="Source">{tx.source}</Detail>
-        <Detail label={chain.id === "sol" ? "Compute Units" : "Gas Used"}>
-          {tx.gas_used.toLocaleString()}
-        </Detail>
-        {chain.id !== "sol" && (
-          <Detail label="Gas Price">{tx.gas_price_gwei} Gwei</Detail>
-        )}
-        <Detail label={chain.id === "sol" ? "Fee" : "Gas Cost"}>
-          {tx.gas_cost_eth.toFixed(6)} {chain.nativeSymbol}
-        </Detail>
-        {tx.pools && tx.pools.length > 0 && (
-          <div className="sm:col-span-2 lg:col-span-3 mt-1">
-            <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wide">
-              Pools ({tx.pools.length})
-            </span>
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
-              {tx.pools.map((p, i) => (
-                <a
-                  key={i}
-                  href={`${chain.explorerAddrUrl}${p}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-accent)] bg-[var(--color-surface-hover)] px-2 py-1 rounded-[3px] transition-colors"
-                >
-                  {truncAddr(p, 8, 6)}
-                </a>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ─── Mobile Card ───
-
-function TxCard({
-  tx,
-  chain,
-  isExpanded,
-  onToggle,
-}: {
-  tx: Transaction;
-  chain: ChainConfig;
-  isExpanded: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <div className="border-b border-[var(--color-border)]">
-      <div
-        className="px-1 py-3 cursor-pointer active:bg-[var(--color-surface)] transition-colors"
-        onClick={onToggle}
-      >
-        <div className="flex items-start justify-between gap-2 mb-2">
-          <span className="font-[family-name:var(--font-mono)] text-[13px] text-[var(--color-text)]">
-            {truncHash(tx.tx_hash)}
-          </span>
-          <span
-            className="font-[family-name:var(--font-mono)] text-[14px] font-semibold tabular-nums shrink-0"
-            style={{ color: pnlColor(tx.pnl_usd) }}
-          >
-            {tx.pnl_usd !== null ? formatUsd(tx.pnl_usd) : "N/A"}
-          </span>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-          <span className="font-[family-name:var(--font-mono)] text-[var(--color-text-secondary)] tabular-nums">
-            #{tx.block_number}
-          </span>
-          <span className="inline-flex items-center text-[var(--color-text-secondary)]">
-            {tx.swap_count ?? 0} swaps
-            {tx.swap_count && <SwapDots count={tx.swap_count} />}
-          </span>
-          {tx.dex_list.map((d) => (
-            <DexBadge key={d} name={d} />
-          ))}
-          <span className="font-[family-name:var(--font-mono)] text-[var(--color-text-dim)] tabular-nums">
-            gas {tx.gas_cost_usd !== null ? formatUsd(tx.gas_cost_usd) : "—"}
-          </span>
-          {tx.profit_token && (
-            <span className="text-[var(--color-text-dim)]">
-              {tx.profit_token}
-            </span>
-          )}
-        </div>
-
-        <div className="mt-2">
-          <ExternalLinks tx={tx} chain={chain} />
-        </div>
-      </div>
-
-      {isExpanded && <ExpandedDetails tx={tx} chain={chain} />}
-    </div>
-  );
-}
-
-// ─── Desktop Table Row ───
-
-function TxRow({
-  tx,
-  chain,
-  isExpanded,
-  onToggle,
-}: {
-  tx: Transaction;
-  chain: ChainConfig;
-  isExpanded: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <>
-      <tr
-        className="group border-b border-[var(--color-border)] cursor-pointer transition-colors hover:bg-[var(--color-surface)]"
-        onClick={onToggle}
-      >
-        <td className="py-3 pr-4">
-          <span className="font-[family-name:var(--font-mono)] text-[13px] text-[var(--color-text)] group-hover:text-[var(--color-accent)] transition-colors whitespace-nowrap">
-            {truncHash(tx.tx_hash)}
-          </span>
-        </td>
-        <td className="py-3 pr-4">
-          <span className="font-[family-name:var(--font-mono)] text-[12px] text-[var(--color-text-secondary)] tabular-nums">
-            {tx.block_number}
-          </span>
-        </td>
-        <td className="py-3 pr-4">
-          <span className="inline-flex items-center">
-            <span className="font-[family-name:var(--font-mono)] text-[13px] font-medium tabular-nums">
-              {tx.swap_count ?? "—"}
-            </span>
-            {tx.swap_count && <SwapDots count={tx.swap_count} />}
-          </span>
-        </td>
-        <td className="py-3 pr-4">
-          {tx.dex_list.length > 0
-            ? tx.dex_list.map((d) => <DexBadge key={d} name={d} />)
-            : <span className="text-[var(--color-text-dim)]">—</span>}
-        </td>
-        <td className="py-3 pr-4 text-right">
-          <span className="font-[family-name:var(--font-mono)] text-[12px] text-[var(--color-text-secondary)] tabular-nums">
-            {tx.gas_cost_usd !== null ? formatUsd(tx.gas_cost_usd) : "—"}
-          </span>
-        </td>
-        <td className="py-3 pr-4 text-right">
-          <span
-            className="font-[family-name:var(--font-mono)] text-[13px] font-medium tabular-nums"
-            style={{ color: pnlColor(tx.pnl_usd) }}
-          >
-            {tx.pnl_usd !== null ? formatUsd(tx.pnl_usd) : "N/A"}
-          </span>
-          {tx.profit_token && (
-            <div className="text-[10px] text-[var(--color-text-dim)] mt-0.5">
-              {tx.profit_token}
-            </div>
-          )}
-        </td>
-        <td className="py-3 text-right">
-          <ExternalLinks tx={tx} chain={chain} />
-        </td>
-      </tr>
-      {isExpanded && (
-        <tr>
-          <td colSpan={7} className="p-0">
-            <ExpandedDetails tx={tx} chain={chain} />
-          </td>
-        </tr>
-      )}
-    </>
-  );
-}
 
 // ─── Pagination helpers ───
 
@@ -928,7 +559,6 @@ function pageNumbers(current: number, total: number): (number | "...")[] {
 
 export default function Page() {
   const [chain, setChain] = useState<ChainId>("eth");
-  const [mevType, setMevType] = useState<MevType>("sandwich");
   const [data, setData] = useState<Data | null>(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -959,7 +589,6 @@ export default function Page() {
     setExpanded(null);
     setSearch("");
     setPage(1);
-    setMevType("sandwich");
     load();
   }, [chain, load]);
 
@@ -1005,10 +634,6 @@ export default function Page() {
 
   const sandwiches = data.sandwiches ?? [];
 
-  const pnlTxs = data.transactions.filter((t) => t.pnl_usd !== null);
-  const totalPnl = pnlTxs.reduce((s, t) => s + (t.pnl_usd ?? 0), 0);
-  const profitableTxs = pnlTxs.filter((t) => (t.pnl_usd ?? 0) > 0);
-
   const totalSandwichProfit = sandwiches.reduce(
     (s, sw) => s + (sw.bot_profit_usd ?? 0),
     0
@@ -1016,18 +641,6 @@ export default function Page() {
   const totalVictims = sandwiches.reduce((s, sw) => s + sw.victims.length, 0);
 
   const q = search.trim().toLowerCase();
-
-  const filteredArb = q
-    ? data.transactions.filter(
-        (tx) =>
-          tx.tx_hash.toLowerCase().includes(q) ||
-          tx.from_address.toLowerCase().includes(q) ||
-          (tx.to_address ?? "").toLowerCase().includes(q) ||
-          tx.block_number.toString().includes(q) ||
-          (tx.profit_token ?? "").toLowerCase().includes(q) ||
-          tx.dex_list.some((d) => d.toLowerCase().includes(q))
-      )
-    : data.transactions;
 
   const filteredSandwich = q
     ? sandwiches.filter(
