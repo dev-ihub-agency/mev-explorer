@@ -286,8 +286,8 @@ function TypeTabs({
   sandwichCount: number;
 }) {
   const tabs: { id: MevType; label: string; count: number }[] = [
-    { id: "arbitrage", label: "Arbitrage", count: arbCount },
     { id: "sandwich", label: "Sandwich", count: sandwichCount },
+    { id: "arbitrage", label: "Arbitrage", count: arbCount },
   ];
   return (
     <div className="flex gap-1 p-0.5 bg-[var(--color-surface)] rounded-[5px]">
@@ -928,7 +928,7 @@ function pageNumbers(current: number, total: number): (number | "...")[] {
 
 export default function Page() {
   const [chain, setChain] = useState<ChainId>("eth");
-  const [mevType, setMevType] = useState<MevType>("arbitrage");
+  const [mevType, setMevType] = useState<MevType>("sandwich");
   const [data, setData] = useState<Data | null>(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -959,7 +959,7 @@ export default function Page() {
     setExpanded(null);
     setSearch("");
     setPage(1);
-    setMevType("arbitrage");
+    setMevType("sandwich");
     load();
   }, [chain, load]);
 
@@ -1073,7 +1073,7 @@ export default function Page() {
                 MEV Scanner
               </h1>
               <p className="text-[10px] sm:text-[11px] text-[var(--color-text-dim)] mt-1 sm:mt-1.5 tracking-wide">
-                MEV on {chainConfig.label}
+                Sandwich attacks on {chainConfig.label}
               </p>
             </div>
             <div className="hidden sm:block">
@@ -1115,49 +1115,34 @@ export default function Page() {
       </header>
 
       {/* Stats */}
-      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 sm:gap-6 mb-8 sm:mb-10 pb-6 sm:pb-8 border-b border-[var(--color-border)]">
+      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 sm:gap-6 mb-8 sm:mb-10 pb-6 sm:pb-8 border-b border-[var(--color-border)]">
         <Stat
-          label="Arbitrage Txs"
-          value={data.total_arbitrage_txs}
+          label="Sandwich Attacks"
+          value={sandwiches.length}
           sub={`from ${data.scan_blocks} ${blockLabel}`}
         />
         <Stat
-          label="Arb PnL"
-          value={formatUsd(totalPnl)}
-          sub={`${pnlTxs.length} txs with data`}
-          color={totalPnl >= 0 ? "var(--color-positive)" : "var(--color-negative)"}
-        />
-        <Stat
-          label="Profitable"
-          value={`${profitableTxs.length} / ${pnlTxs.length}`}
-          sub="arb txs"
-        />
-        <Stat
-          label="Sandwiches"
-          value={sandwiches.length}
-          sub={`${totalVictims} victim${totalVictims !== 1 ? "s" : ""}`}
-        />
-        <Stat
-          label="Sandwich Profit"
+          label="Bot Profit"
           value={sandwiches.length > 0 ? formatUsd(totalSandwichProfit) : "—"}
-          sub="total bot profit"
+          sub={`${sandwiches.filter(s => (s.bot_profit_usd ?? 0) > 0).length} profitable`}
           color={totalSandwichProfit > 0 ? "var(--color-positive)" : undefined}
         />
-        {hasRelay ? (
-          <Stat
-            label="Peak MEV"
-            value={`${maxMev.toFixed(4)} Ξ`}
-            sub="per block (relay)"
-          />
-        ) : (
-          <Stat
-            label="DEXes"
-            value={
-              new Set(data.transactions.flatMap((t) => t.dex_list)).size
-            }
-            sub="unique protocols"
-          />
-        )}
+        <Stat
+          label="Victims"
+          value={totalVictims}
+          sub={`across ${sandwiches.length} attacks`}
+        />
+        <Stat
+          label="Avg Profit"
+          value={sandwiches.length > 0 ? formatUsd(totalSandwichProfit / sandwiches.length) : "—"}
+          sub="per sandwich"
+          color={totalSandwichProfit > 0 ? "var(--color-positive)" : undefined}
+        />
+        <Stat
+          label="Arbitrage"
+          value={data.total_arbitrage_txs}
+          sub={pnlTxs.length > 0 ? `PnL ${formatUsd(totalPnl)}` : "no PnL data"}
+        />
       </section>
 
       {/* Transactions */}
@@ -1285,7 +1270,7 @@ export default function Page() {
         {totalPages > 1 && (
           <div className="flex items-center justify-between mt-4 pt-4 border-t border-[var(--color-border)]">
             <span className="text-[11px] text-[var(--color-text-dim)] tabular-nums">
-              {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filtered.length)} of {filtered.length}
+              {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, mevType === "arbitrage" ? filteredArb.length : filteredSandwich.length)} of {mevType === "arbitrage" ? filteredArb.length : filteredSandwich.length}
             </span>
             <div className="flex items-center gap-1">
               <PagerBtn
