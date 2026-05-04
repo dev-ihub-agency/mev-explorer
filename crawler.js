@@ -11,6 +11,7 @@
 import { ethers } from "ethers";
 import fs from "node:fs";
 import path from "node:path";
+import OSS from "ali-oss";
 
 // ---------- 配置 ----------
 
@@ -43,6 +44,31 @@ const STABLECOIN_FALLBACK = {
 };
 
 const log = (msg) => console.log(msg);
+
+// ---------- Aliyun OSS ----------
+
+const ossClient = new OSS({
+  region: process.env.ALIYUN_OSS_REGION || "oss-ap-southeast-1",
+  accessKeyId: process.env.ALIYUN_OSS_ACCESS_KEY_ID,
+  accessKeySecret: process.env.ALIYUN_OSS_ACCESS_KEY_SECRET,
+  bucket: process.env.ALIYUN_OSS_BUCKET || "mev-explorer-data",
+});
+
+const OSS_KEY = process.env.OSS_DATA_KEY || "data.json";
+
+async function uploadToOSS(filePath) {
+  try {
+    const result = await ossClient.put(OSS_KEY, filePath, {
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "public, max-age=10",
+      },
+    });
+    log(`  ✓ 已上传到 OSS: ${result.url}`);
+  } catch (e) {
+    log(`  [!] OSS 上传失败: ${e.message}`);
+  }
+}
 
 // ---------- RPC ----------
 
@@ -343,12 +369,12 @@ function computePnl(arbTxs, prices) {
 const WEB_OUTPUT = path.join("web", "public", "data.json");
 const WATCH_INTERVAL = 12_000;
 
-function saveOutput(output) {
+async function saveOutput(output) {
   fs.mkdirSync("public", { recursive: true });
   fs.writeFileSync(OUTPUT_FILE, JSON.stringify(output, null, 2), "utf-8");
-  // Also write to web/public for the Next.js frontend
   fs.mkdirSync(path.join("web", "public"), { recursive: true });
   fs.writeFileSync(WEB_OUTPUT, JSON.stringify(output, null, 2), "utf-8");
+  await uploadToOSS(OUTPUT_FILE);
 }
 
 async function runOnce(provider) {
@@ -403,7 +429,7 @@ async function main() {
     const totalPnl = pnlTxs.reduce((s, t) => s + t.pnl_usd, 0);
     log(`  ✓ ${pnlTxs.length} 笔有 PnL, 总计 $${totalPnl.toFixed(2)}`);
 
-    saveOutput({
+    await saveOutput({
       updated_at: new Date().toISOString(),
       scan_blocks: SCAN_BLOCKS,
       total_arbitrage_txs: arbTxs.length,
@@ -411,7 +437,7 @@ async function main() {
       transactions: arbTxs,
     });
 
-    log(`\n  已保存 → ${OUTPUT_FILE} & ${WEB_OUTPUT}`);
+    log(`\n  已保存 → ${OUTPUT_FILE} & OSS`);
     return;
   }
 
@@ -473,7 +499,7 @@ async function main() {
       }
       allTxs = merged;
 
-      saveOutput({
+      await saveOutput({
         updated_at: new Date().toISOString(),
         scan_blocks: blocksToScan,
         total_arbitrage_txs: allTxs.length,

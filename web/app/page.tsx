@@ -488,7 +488,8 @@ export default function Page() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch("/data.json?" + Date.now());
+      const dataUrl = process.env.NEXT_PUBLIC_DATA_URL || "/data.json";
+      const res = await fetch(dataUrl + "?" + Date.now());
       const json: Data = await res.json();
       setData(json);
     } catch (e) {
