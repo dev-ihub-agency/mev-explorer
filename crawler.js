@@ -656,7 +656,7 @@ async function main() {
     log(`  ✓ ${relayBlocks.length} 个区块`);
 
     log("\n[2/3] 链上扫描最近区块...");
-    const { arbs: arbTxs, sandwiches } = await scanBlocks(provider, SCAN_BLOCKS);
+    let { arbs: arbTxs, sandwiches } = await scanBlocks(provider, SCAN_BLOCKS);
     log(`  ✓ ${arbTxs.length} 笔套利交易, ${sandwiches.length} 笔三明治`);
     arbTxs.sort((a, b) => b.swap_count - a.swap_count);
 
@@ -716,7 +716,7 @@ async function main() {
       const relayBlocks = await fetchRelayBlocks(15);
 
       const newArbs = [];
-      const newSandwiches = [];
+      let newSandwiches = [];
       for (let i = 0; i < blocksToScan; i++) {
         const blockNum = currentBlock - i;
         const hex = "0x" + blockNum.toString(16);

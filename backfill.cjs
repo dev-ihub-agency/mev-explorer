@@ -151,107 +151,114 @@ async function backfillSolana() {
   const WSOL = "So11111111111111111111111111111111111111112";
 
   let allSandwiches = [];
+  const BATCH = 10;
 
-  for (let i = 0; i < numBlocks; i++) {
-    const slot = latestSlot - i;
-    try {
-      const block = await conn.getBlock(slot, {
-        maxSupportedTransactionVersion: 0,
-        transactionDetails: "full",
-        rewards: false,
-      });
-      if (!block) continue;
-      const blockTimestamp = block.blockTime ? new Date(block.blockTime * 1000).toISOString() : null;
-      const txs = block.transactions || [];
+  function processBlock(block, slot) {
+    const blockTimestamp = block.blockTime ? new Date(block.blockTime * 1000).toISOString() : null;
+    const txs = block.transactions || [];
+    const swapTxs = [];
 
-      const swapTxs = [];
-      for (let ti = 0; ti < txs.length; ti++) {
-        const tx = txs[ti];
-        if (tx.meta?.err) continue;
-        const msg = tx.transaction?.message;
-        if (!msg) continue;
-        const staticKeys = msg.staticAccountKeys?.map(k => k.toString()) || [];
-        const loaded = tx.meta?.loadedAddresses || { writable: [], readonly: [] };
-        const allKeys = [...staticKeys, ...loaded.writable.map(k => k.toString()), ...loaded.readonly.map(k => k.toString())];
-        const hasDex = allKeys.some(k => DEX_PROGRAMS.includes(k));
-        if (!hasDex) continue;
+    for (let ti = 0; ti < txs.length; ti++) {
+      const tx = txs[ti];
+      if (tx.meta?.err) continue;
+      const msg = tx.transaction?.message;
+      if (!msg) continue;
+      const staticKeys = msg.staticAccountKeys?.map(k => k.toString()) || [];
+      const loaded = tx.meta?.loadedAddresses || { writable: [], readonly: [] };
+      const allKeys = [...staticKeys, ...loaded.writable.map(k => k.toString()), ...loaded.readonly.map(k => k.toString())];
+      if (!allKeys.some(k => DEX_PROGRAMS.includes(k))) continue;
 
-        const signer = staticKeys[0];
-        const pre = tx.meta?.preTokenBalances || [];
-        const post = tx.meta?.postTokenBalances || [];
-        const diffs = {};
-        for (const b of post) {
-          const mint = b.mint;
-          const owner = b.owner;
-          if (owner !== signer) continue;
-          const preB = pre.find(p => p.accountIndex === b.accountIndex);
-          const preAmt = preB ? Number(preB.uiTokenAmount?.amount || 0) : 0;
-          const postAmt = Number(b.uiTokenAmount?.amount || 0);
-          const diff = postAmt - preAmt;
-          if (diff !== 0) diffs[mint] = (diffs[mint] || 0) + diff;
+      const signer = staticKeys[0];
+      const pre = tx.meta?.preTokenBalances || [];
+      const post = tx.meta?.postTokenBalances || [];
+      const diffs = {};
+      for (const b of post) {
+        if (b.owner !== signer) continue;
+        const preB = pre.find(p => p.accountIndex === b.accountIndex);
+        const preAmt = preB ? Number(preB.uiTokenAmount?.amount || 0) : 0;
+        const diff = Number(b.uiTokenAmount?.amount || 0) - preAmt;
+        if (diff !== 0) diffs[b.mint] = (diffs[b.mint] || 0) + diff;
+      }
+
+      const mints = Object.keys(diffs);
+      if (mints.length >= 2) {
+        const inMints = mints.filter(m => diffs[m] < 0);
+        const outMints = mints.filter(m => diffs[m] > 0);
+        if (inMints.length > 0 && outMints.length > 0) {
+          swapTxs.push({ txIndex: ti, signer, sig: tx.transaction.signatures[0], tokenIn: inMints[0], amountIn: String(Math.abs(diffs[inMints[0]])), tokenOut: outMints[0], amountOut: String(diffs[outMints[0]]) });
         }
-
-        const mints = Object.keys(diffs);
-        if (mints.length >= 2) {
-          const inMints = mints.filter(m => diffs[m] < 0);
-          const outMints = mints.filter(m => diffs[m] > 0);
-          if (inMints.length > 0 && outMints.length > 0) {
-            swapTxs.push({
-              txIndex: ti,
-              signer,
-              sig: tx.transaction.signatures[0],
-              tokenIn: inMints[0],
-              amountIn: String(Math.abs(diffs[inMints[0]])),
-              tokenOut: outMints[0],
-              amountOut: String(diffs[outMints[0]]),
-            });
-          }
-        }
-      }
-
-      const bySigner = {};
-      for (const r of swapTxs) {
-        if (!bySigner[r.signer]) bySigner[r.signer] = [];
-        bySigner[r.signer].push(r);
-      }
-
-      for (const [signer, records] of Object.entries(bySigner)) {
-        if (records.length < 2) continue;
-        records.sort((a, b) => a.txIndex - b.txIndex);
-
-        for (let j = 0; j < records.length - 1; j++) {
-          const entry = records[j];
-          const exit = records[j + 1];
-          if (entry.tokenIn === exit.tokenOut && entry.tokenOut === exit.tokenIn) {
-            const victims = swapTxs.filter(
-              r => r.signer !== signer && r.txIndex > entry.txIndex && r.txIndex < exit.txIndex
-            );
-            if (victims.length === 0) continue;
-            allSandwiches.push({
-              type: "sandwich",
-              block_number: slot,
-              bot_address: signer,
-              pool: "",
-              dex: "Solana DEX",
-              entry_tx: { tx_hash: entry.sig, token_in: entry.tokenIn, amount_in: entry.amountIn, token_out: entry.tokenOut, amount_out: entry.amountOut },
-              exit_tx: { tx_hash: exit.sig, token_in: exit.tokenIn, amount_in: exit.amountIn, token_out: exit.tokenOut, amount_out: exit.amountOut },
-              victims: victims.map(v => ({ tx_hash: v.sig, from_address: v.signer, token_in: v.tokenIn, amount_in: v.amountIn, token_out: v.tokenOut, amount_out: v.amountOut })),
-              bot_profit_usd: null,
-              explorer_base: "https://solscan.io",
-              block_timestamp: blockTimestamp,
-            });
-          }
-        }
-      }
-      if ((i + 1) % 10 === 0 || i === numBlocks - 1) {
-        console.log(`  Slot ${latestSlot} → ${slot}: scanned ${i + 1}/${numBlocks}, ${allSandwiches.length} sandwiches`);
-      }
-    } catch (e) {
-      if (!e.message?.includes("was skipped")) {
-        console.log(`  [!] Slot ${slot}: ${e.message?.slice(0, 60)}`);
       }
     }
-    await new Promise(r => setTimeout(r, 200));
+
+    const bySigner = {};
+    for (const r of swapTxs) { if (!bySigner[r.signer]) bySigner[r.signer] = []; bySigner[r.signer].push(r); }
+
+    const found = [];
+    for (const [signer, records] of Object.entries(bySigner)) {
+      if (records.length < 2) continue;
+      records.sort((a, b) => a.txIndex - b.txIndex);
+      for (let j = 0; j < records.length - 1; j++) {
+        const entry = records[j], exit = records[j + 1];
+        if (entry.tokenIn === exit.tokenOut && entry.tokenOut === exit.tokenIn) {
+          const victims = swapTxs.filter(r => r.signer !== signer && r.txIndex > entry.txIndex && r.txIndex < exit.txIndex);
+          if (victims.length === 0) continue;
+          found.push({
+            type: "sandwich", block_number: slot, bot_address: signer, pool: "", dex: "Solana DEX",
+            entry_tx: { tx_hash: entry.sig, token_in: entry.tokenIn, amount_in: entry.amountIn, token_out: entry.tokenOut, amount_out: entry.amountOut },
+            exit_tx: { tx_hash: exit.sig, token_in: exit.tokenIn, amount_in: exit.amountIn, token_out: exit.tokenOut, amount_out: exit.amountOut },
+            victims: victims.map(v => ({ tx_hash: v.sig, from_address: v.signer, token_in: v.tokenIn, amount_in: v.amountIn, token_out: v.tokenOut, amount_out: v.amountOut })),
+            bot_profit_usd: null, explorer_base: "https://solscan.io", block_timestamp: blockTimestamp,
+          });
+        }
+      }
+    }
+    return found;
+  }
+
+  const FLUSH_EVERY = 5000;
+  let lastFlushed = 0;
+
+  async function flushToOSS() {
+    if (allSandwiches.length === lastFlushed) return;
+    const newItems = allSandwiches.slice(lastFlushed);
+    let existing = [];
+    try {
+      const res = await ossClient.get(HISTORY_KEY);
+      existing = JSON.parse(res.content.toString());
+    } catch {}
+    const seenTx = new Set(existing.map((s) => s.entry_tx?.tx_hash));
+    const toAdd = newItems.filter((s) => s.block_timestamp && !seenTx.has(s.entry_tx?.tx_hash));
+    if (toAdd.length === 0) { lastFlushed = allSandwiches.length; return; }
+    const merged = [...existing, ...toAdd];
+    const buf = Buffer.from(JSON.stringify(merged), "utf-8");
+    await ossClient.put(HISTORY_KEY, buf, {
+      headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30" },
+    });
+    console.log(`  ✓ Flushed ${toAdd.length} new → OSS (total: ${merged.length})`);
+    lastFlushed = allSandwiches.length;
+  }
+
+  for (let i = 0; i < numBlocks; i += BATCH) {
+    const batchEnd = Math.min(i + BATCH, numBlocks);
+    const promises = [];
+    for (let j = i; j < batchEnd; j++) {
+      const slot = latestSlot - j;
+      promises.push(
+        conn.getBlock(slot, { maxSupportedTransactionVersion: 0, transactionDetails: "full", rewards: false })
+          .then((block) => block ? processBlock(block, slot) : [])
+          .catch((e) => { if (!e.message?.includes("was skipped")) console.log(`  [!] Slot ${slot}: ${e.message?.slice(0, 60)}`); return []; })
+      );
+    }
+    const results = await Promise.all(promises);
+    for (const r of results) allSandwiches.push(...r);
+
+    if ((i + BATCH) % 500 === 0 || i + BATCH >= numBlocks) {
+      console.log(`  Scanned ${Math.min(i + BATCH, numBlocks)}/${numBlocks} slots, ${allSandwiches.length} sandwiches`);
+    }
+    if ((i + BATCH) % FLUSH_EVERY === 0 || i + BATCH >= numBlocks) {
+      await flushToOSS();
+    }
+    await new Promise(r => setTimeout(r, 500));
   }
   return allSandwiches;
 }
@@ -279,6 +286,23 @@ async function main() {
     console.log(`[${chain.toUpperCase()}] Latest block: ${latest}, scanning ${numBlocks} blocks back...`);
 
     const BATCH = 5;
+    const FLUSH_EVERY = 2000;
+    let lastFlushed = 0;
+
+    async function flushToOSS() {
+      if (allSandwiches.length === lastFlushed) return;
+      const newItems = allSandwiches.slice(lastFlushed);
+      let existing = [];
+      try { const res = await ossClient.get(HISTORY_KEY); existing = JSON.parse(res.content.toString()); } catch {}
+      const seenTx = new Set(existing.map((s) => s.entry_tx?.tx_hash));
+      const toAdd = newItems.filter((s) => s.block_timestamp && !seenTx.has(s.entry_tx?.tx_hash));
+      if (toAdd.length === 0) { lastFlushed = allSandwiches.length; return; }
+      const merged = [...existing, ...toAdd];
+      const buf = Buffer.from(JSON.stringify(merged), "utf-8");
+      await ossClient.put(HISTORY_KEY, buf, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30" } });
+      console.log(`  ✓ Flushed ${toAdd.length} new → OSS (total: ${merged.length})`);
+      lastFlushed = allSandwiches.length;
+    }
 
     for (let i = 0; i < numBlocks; i += BATCH) {
       const batchEnd = Math.min(i + BATCH, numBlocks);
@@ -307,6 +331,9 @@ async function main() {
       allSandwiches.push(...found);
       console.log(`  Blocks ${latest - i} → ${latest - batchEnd + 1}: ${found.length} sandwiches (total: ${allSandwiches.length})`);
 
+      if ((i + BATCH) % FLUSH_EVERY === 0 || i + BATCH >= numBlocks) {
+        await flushToOSS();
+      }
       if (i + BATCH < numBlocks) await new Promise((r) => setTimeout(r, 500));
     }
   }

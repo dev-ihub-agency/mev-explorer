@@ -505,10 +505,10 @@ function SandwichCard({
   tz: string;
 }) {
   return (
-    <div className="border border-[var(--color-border)] rounded-[6px] mb-2 sm:mb-3 overflow-hidden">
+    <div className="border border-[var(--color-border)] rounded-[6px] mb-2 sm:mb-3 overflow-hidden card-hover">
       {/* Header — clickable */}
       <div
-        className="px-2.5 sm:px-4 py-2.5 sm:py-3 cursor-pointer hover:bg-[var(--color-surface)] transition-colors"
+        className="px-2.5 sm:px-4 py-2.5 sm:py-3 cursor-pointer hover:bg-[var(--color-surface)] transition-all duration-200"
         onClick={onToggle}
       >
         {/* Top row: badge + block + dex + profit */}
@@ -530,7 +530,7 @@ function SandwichCard({
           <div className="text-right shrink-0">
             <span
               className="font-[family-name:var(--font-mono)] text-[13px] sm:text-[14px] font-semibold tabular-nums"
-              style={{ color: sw.bot_profit_usd != null ? "var(--color-positive)" : "var(--color-text-dim)" }}
+              style={{ color: sw.bot_profit_usd != null ? (sw.bot_profit_usd >= 0 ? "var(--color-positive)" : "var(--color-negative)") : "var(--color-text-dim)" }}
             >
               {sw.bot_profit_usd != null ? formatUsd(sw.bot_profit_usd) : "N/A"}
             </span>
@@ -567,7 +567,7 @@ function SandwichCard({
 
       {/* Expanded flow visualization */}
       {isExpanded && (
-        <div className="px-2 sm:px-4 pb-3 sm:pb-4 pt-1 bg-[var(--color-surface)]">
+        <div className="px-2 sm:px-4 pb-3 sm:pb-4 pt-1 bg-[var(--color-surface)] expand-content">
           <div className="flex flex-col gap-1 sm:gap-1.5">
             <SandwichFlowStep
               role="bot-entry"
@@ -624,7 +624,7 @@ function SandwichCard({
               <div className="text-right flex items-baseline gap-1.5 sm:gap-2">
                 <span
                   className="font-[family-name:var(--font-mono)] text-[13px] sm:text-[14px] font-semibold tabular-nums"
-                  style={{ color: "var(--color-positive)" }}
+                  style={{ color: (sw.bot_profit_usd ?? 0) >= 0 ? "var(--color-positive)" : "var(--color-negative)" }}
                 >
                   {formatUsd(sw.bot_profit_usd)}
                 </span>
@@ -703,6 +703,28 @@ export default function Page() {
   const chainConfig = chain === "all" ? null : CHAINS.find((c) => c.id === chain)!;
   const RAW_CHAINS: ("eth" | "bsc" | "sol")[] = ["eth", "bsc", "sol"];
 
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+
+  // localStorage cache helpers
+  const CACHE_KEY_DATA = "mev_cache_data";
+  const CACHE_KEY_HISTORY = "mev_cache_history";
+  const CACHE_TTL = 60_000;
+
+  useEffect(() => {
+    try {
+      const cached = localStorage.getItem(CACHE_KEY_DATA);
+      if (cached) {
+        const { ts, data } = JSON.parse(cached);
+        if (Date.now() - ts < CACHE_TTL) setAllChainData(data);
+      }
+      const cachedH = localStorage.getItem(CACHE_KEY_HISTORY);
+      if (cachedH) {
+        const { ts, data } = JSON.parse(cachedH);
+        if (Date.now() - ts < CACHE_TTL) { setHistoryData(data); setHistoryLoaded(true); }
+      }
+    } catch {}
+  }, []);
+
   const loadAll = useCallback(async () => {
     const results = await Promise.allSettled(
       RAW_CHAINS.map(async (c) => {
@@ -716,7 +738,7 @@ export default function Page() {
       if (r.status === "fulfilled") next[r.value.chain] = r.value.data;
     }
     setAllChainData(next);
-    setLoading(false);
+    try { localStorage.setItem(CACHE_KEY_DATA, JSON.stringify({ ts: Date.now(), data: next })); } catch {}
   }, []);
 
   const loadHistory = useCallback(async () => {
@@ -732,6 +754,8 @@ export default function Page() {
       if (r.status === "fulfilled") next[r.value.chain] = r.value.data;
     }
     setHistoryData(next);
+    setHistoryLoaded(true);
+    try { localStorage.setItem(CACHE_KEY_HISTORY, JSON.stringify({ ts: Date.now(), data: next })); } catch {}
   }, []);
 
   useEffect(() => {
@@ -739,8 +763,7 @@ export default function Page() {
     setExpanded(null);
     setSearch("");
     setPage(1);
-    loadAll();
-    loadHistory();
+    Promise.all([loadAll(), loadHistory()]).then(() => setLoading(false));
   }, [loadAll, loadHistory]);
 
   useEffect(() => {
@@ -752,8 +775,9 @@ export default function Page() {
   useEffect(() => {
     if (!autoRefresh) return;
     const id = setInterval(loadAll, 15_000);
-    return () => clearInterval(id);
-  }, [autoRefresh, loadAll]);
+    const hid = setInterval(loadHistory, 60_000);
+    return () => { clearInterval(id); clearInterval(hid); };
+  }, [autoRefresh, loadAll, loadHistory]);
 
   const toggle = useCallback(
     (hash: string) => setExpanded((v) => (v === hash ? null : hash)),
@@ -793,12 +817,16 @@ export default function Page() {
     });
   }, [historyData, chartTf, chain, tz]);
 
-  const hasAnyData = RAW_CHAINS.some((c) => allChainData[c] !== null);
+  const hasAnyData = RAW_CHAINS.some((c) => allChainData[c] !== null) && historyLoaded;
 
-  if (loading && !hasAnyData) {
+  if (loading || !hasAnyData) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4 pb-16">
-        <div className="text-[var(--color-text-dim)] text-sm">Loading...</div>
+      <div className="min-h-screen flex flex-col items-center justify-center gap-5 pb-16">
+        <div className="flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: "0ms" }} />
+          <span className="w-2 h-2 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: "150ms" }} />
+          <span className="w-2 h-2 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: "300ms" }} />
+        </div>
         <BottomNav active={chain} onChange={setChain} />
       </div>
     );
@@ -832,9 +860,28 @@ export default function Page() {
   };
 
   const chainsToShow = chain === "all" ? RAW_CHAINS : [chain as "eth" | "bsc" | "sol"];
-  const sandwiches: (Sandwich & { chainId?: string })[] = chainsToShow.flatMap(
-    (c) => (allChainData[c]?.sandwiches ?? []).filter(profitFilter).map((sw) => ({ ...sw, chainId: c }))
-  );
+  const sandwiches: (Sandwich & { chainId?: string })[] = (() => {
+    const seen = new Set<string>();
+    const all: (Sandwich & { chainId?: string })[] = [];
+    for (const c of chainsToShow) {
+      const live = (allChainData[c]?.sandwiches ?? []).filter(profitFilter);
+      for (const sw of live) {
+        const key = sw.entry_tx?.tx_hash;
+        if (key && !seen.has(key)) { seen.add(key); all.push({ ...sw, chainId: c }); }
+      }
+      const hist = (historyData[c] ?? []).filter(profitFilter);
+      for (const sw of hist) {
+        const key = sw.entry_tx?.tx_hash;
+        if (key && !seen.has(key)) { seen.add(key); all.push({ ...sw, chainId: c }); }
+      }
+    }
+    all.sort((a, b) => {
+      const ta = a.block_timestamp ? new Date(a.block_timestamp).getTime() : 0;
+      const tb = b.block_timestamp ? new Date(b.block_timestamp).getTime() : 0;
+      return tb - ta;
+    });
+    return all;
+  })();
 
   const totalSandwichProfit = sandwiches.reduce(
     (s, sw) => s + (sw.bot_profit_usd ?? 0),
@@ -877,7 +924,7 @@ export default function Page() {
     .slice(0, 10);
 
   return (
-    <div className="min-h-screen px-3 py-6 sm:px-6 sm:py-8 md:px-8 lg:px-16 max-w-[1440px] mx-auto">
+    <div className="min-h-screen px-3 py-6 sm:px-6 sm:py-8 md:px-8 lg:px-16 max-w-[1440px] mx-auto page-content">
       {/* Header */}
       <header className="mb-6 sm:mb-10">
         <div className="flex items-center justify-between gap-2 mb-3 sm:mb-0">
@@ -946,7 +993,7 @@ export default function Page() {
       </header>
 
       {/* MEV Stats — follows current chain + date/profit filter */}
-      <section className="mb-8 sm:mb-10 pb-6 sm:pb-8 border-b border-[var(--color-border)]">
+      <section className="mb-8 sm:mb-10 pb-6 sm:pb-8 border-b border-[var(--color-border)] animate-fade-in" style={{ animationDelay: "50ms" }}>
         <h2 className="text-[12px] font-medium uppercase tracking-[0.06em] text-[var(--color-text-secondary)] mb-4">
           MEV Stats {chain !== "all" && <span className="normal-case">— {chainConfig!.label}</span>}
         </h2>
@@ -988,7 +1035,16 @@ export default function Page() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
             {RAW_CHAINS.map((c) => {
               const chainCfg = CHAINS.find((ch) => ch.id === c)!;
-              const chainSw = (allChainData[c]?.sandwiches ?? []).filter(profitFilter);
+              const seen = new Set<string>();
+              const chainSw: Sandwich[] = [];
+              for (const sw of (allChainData[c]?.sandwiches ?? []).filter(profitFilter)) {
+                const key = sw.entry_tx?.tx_hash;
+                if (key && !seen.has(key)) { seen.add(key); chainSw.push(sw); }
+              }
+              for (const sw of (historyData[c] ?? []).filter(profitFilter)) {
+                const key = sw.entry_tx?.tx_hash;
+                if (key && !seen.has(key)) { seen.add(key); chainSw.push(sw); }
+              }
               const chainProfit = chainSw.reduce((s, sw) => s + (sw.bot_profit_usd ?? 0), 0);
               const chainBlocks = allChainData[c]?.scan_blocks ?? 0;
               return (
@@ -1153,7 +1209,7 @@ export default function Page() {
                         {truncHash(sw.entry_tx.tx_hash)}
                       </a>
                     </div>
-                    <div className="font-[family-name:var(--font-mono)] text-[13px] sm:text-[14px] font-semibold tabular-nums text-[var(--color-positive)] shrink-0">
+                    <div className={`font-[family-name:var(--font-mono)] text-[13px] sm:text-[14px] font-semibold tabular-nums shrink-0`} style={{ color: (sw.bot_profit_usd ?? 0) >= 0 ? "var(--color-positive)" : "var(--color-negative)" }}>
                       {formatUsd(sw.bot_profit_usd ?? 0)}
                     </div>
                   </div>
@@ -1183,7 +1239,7 @@ export default function Page() {
           label="Bot Profit"
           value={sandwiches.length > 0 ? formatUsd(totalSandwichProfit) : "—"}
           sub={`${sandwiches.filter(s => (s.bot_profit_usd ?? 0) > 0).length} profitable`}
-          color={totalSandwichProfit > 0 ? "var(--color-positive)" : undefined}
+          color={totalSandwichProfit >= 0 ? "var(--color-positive)" : "var(--color-negative)"}
         />
         <Stat
           label="Victims"
@@ -1265,15 +1321,16 @@ export default function Page() {
               ? CHAINS.find((c) => c.id === sw.chainId) ?? CHAINS[0]
               : chainConfig!;
             return (
-              <SandwichCard
-                key={sw.entry_tx.tx_hash + "-" + i}
-                sw={sw}
-                chain={swChain}
-                isExpanded={expanded === sw.entry_tx.tx_hash}
-                onToggle={() => toggle(sw.entry_tx.tx_hash)}
-                showChainBadge={chain === "all"}
-                tz={tz}
-              />
+              <div key={sw.entry_tx.tx_hash + "-" + i} className="animate-fade-in" style={{ animationDelay: `${i * 30}ms` }}>
+                <SandwichCard
+                  sw={sw}
+                  chain={swChain}
+                  isExpanded={expanded === sw.entry_tx.tx_hash}
+                  onToggle={() => toggle(sw.entry_tx.tx_hash)}
+                  showChainBadge={chain === "all"}
+                  tz={tz}
+                />
+              </div>
             );
           })}
         </div>

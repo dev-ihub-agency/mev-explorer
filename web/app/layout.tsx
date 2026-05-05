@@ -24,8 +24,19 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const ossBase = "https://mev-explorer-data.oss-ap-southeast-1.aliyuncs.com";
   return (
     <html lang="en" className={`${poppins.variable} ${jetbrains.variable}`}>
+      <head>
+        <link rel="dns-prefetch" href={ossBase} />
+        <link rel="preconnect" href={ossBase} crossOrigin="anonymous" />
+        <link rel="preload" href={`${ossBase}/eth/data.json`} as="fetch" crossOrigin="anonymous" />
+        <link rel="preload" href={`${ossBase}/bsc/data.json`} as="fetch" crossOrigin="anonymous" />
+        <link rel="preload" href={`${ossBase}/sol/data.json`} as="fetch" crossOrigin="anonymous" />
+        <link rel="preload" href={`${ossBase}/eth/sandwich-history.json`} as="fetch" crossOrigin="anonymous" />
+        <link rel="preload" href={`${ossBase}/bsc/sandwich-history.json`} as="fetch" crossOrigin="anonymous" />
+        <link rel="preload" href={`${ossBase}/sol/sandwich-history.json`} as="fetch" crossOrigin="anonymous" />
+      </head>
       <body>{children}</body>
     </html>
   );
