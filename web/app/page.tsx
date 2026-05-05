@@ -933,6 +933,7 @@ export default function Page() {
     .slice(0, 10);
 
   return (
+    <>
     <div className="min-h-screen px-3 py-6 sm:px-6 sm:py-8 md:px-8 lg:px-16 max-w-[1440px] mx-auto page-content">
       {/* Header */}
       <header className="mb-6 sm:mb-10">
@@ -1395,9 +1396,8 @@ export default function Page() {
               ? "On-chain Swap event scanning on BSC. Sandwich = same bot front-runs & back-runs victim swaps on the same pool."
               : "On-chain DEX instruction scanning on Solana. Sandwich = same signer brackets victim swaps in the same slot."}
       </footer>
-
-      {/* Bottom Navigation */}
-      <BottomNav active={chain} onChange={setChain} />
     </div>
+    <BottomNav active={chain} onChange={setChain} />
+    </>
   );
 }
