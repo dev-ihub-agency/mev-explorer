@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useTransition } from "react";
 import {
   AreaChart,
   Area,
@@ -193,19 +193,23 @@ function formatDateTz(iso: string, tz: string): string {
   });
 }
 
+const bucketFmtCache = new Map<string, Intl.DateTimeFormat>();
 function dateBucketKey(iso: string, tz: string, hourly: boolean): string {
-  const d = new Date(iso);
-  const locStr = d.toLocaleString("en-US", {
-    timeZone: tz,
-    year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", hour12: false,
-  });
-  const m = locStr.match(/(\d+)\/(\d+)\/(\d+),?\s*(\d+):(\d+)/);
-  if (!m) return iso;
-  const [, mo, dd, yr, hh] = m;
+  const cacheKey = `${tz}-${hourly}`;
+  let fmt = bucketFmtCache.get(cacheKey);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    });
+    bucketFmtCache.set(cacheKey, fmt);
+  }
+  const parts = fmt.formatToParts(new Date(iso));
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "00";
   return hourly
-    ? `${yr}-${mo}-${dd} ${hh}:00`
-    : `${yr}-${mo}-${dd}`;
+    ? `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:00`
+    : `${get("year")}-${get("month")}-${get("day")}`;
 }
 
 function truncHash(hash: string) {
@@ -696,6 +700,7 @@ export default function Page() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [chartTf, setChartTf] = useState<TimeFrame>("all");
+  const [isPending, startTransition] = useTransition();
   const [tz, setTz] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
   const [historyData, setHistoryData] = useState<Record<string, Sandwich[]>>({ eth: [], bsc: [], sol: [] });
   const PAGE_SIZE = 20;
@@ -802,12 +807,16 @@ export default function Page() {
     );
 
     const buckets = new Map<string, { date: string; profit: number; count: number }>();
+    const hourly = chartTf === "1d";
     for (const sw of filtered) {
-      const key = dateBucketKey(sw.block_timestamp!, tz, chartTf === "1d");
-      const existing = buckets.get(key) || { date: key, profit: 0, count: 0 };
-      existing.profit += sw.bot_profit_usd ?? 0;
-      existing.count += 1;
-      buckets.set(key, existing);
+      const key = dateBucketKey(sw.block_timestamp!, tz, hourly);
+      const existing = buckets.get(key);
+      if (existing) {
+        existing.profit += sw.bot_profit_usd ?? 0;
+        existing.count += 1;
+      } else {
+        buckets.set(key, { date: key, profit: sw.bot_profit_usd ?? 0, count: 1 });
+      }
     }
 
     let cumulative = 0;
@@ -1098,7 +1107,7 @@ export default function Page() {
             {TIMEFRAMES.map((tf) => (
               <button
                 key={tf.id}
-                onClick={() => setChartTf(tf.id)}
+                onClick={() => startTransition(() => setChartTf(tf.id))}
                 className={`px-2.5 py-1 text-[11px] font-medium rounded-[4px] transition-colors cursor-pointer ${
                   chartTf === tf.id
                     ? "bg-[var(--color-accent)] text-[var(--color-bg)]"
